@@ -12,8 +12,8 @@ pub struct JobworkerpClientImpl {
 }
 
 impl JobworkerpClientImpl {
-    pub async fn new(addr: String, timeout: Duration) -> Result<Self> {
-        let con = GrpcConnection::new(addr, timeout).await?;
+    pub async fn new(addr: String, request_timeout: Duration) -> Result<Self> {
+        let con = GrpcConnection::new(addr, request_timeout).await?;
         Ok(Self { connection: con })
     }
     pub async fn init_grpc_connection(&self) -> Result<()> {
