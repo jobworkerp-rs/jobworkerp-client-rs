@@ -4,9 +4,9 @@ on:
   pull_request:
     branches:
     - main
-  push:
-    branches:
-    - main
+#  push:
+#    branches:
+#    - main
 permissions:
   contents: read
 
@@ -64,4 +64,3 @@ jobs:
         args: --release --all-features
     - name: Run test
       run: cargo test
-

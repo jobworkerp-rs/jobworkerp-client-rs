@@ -2,7 +2,9 @@ use crate::grpc::GrpcConnection;
 use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
-    job_status_service_client::JobStatusServiceClient, worker_service_client::WorkerServiceClient,
+    job_status_service_client::JobStatusServiceClient,
+    worker_schema_service_client::WorkerSchemaServiceClient,
+    worker_service_client::WorkerServiceClient,
 };
 use anyhow::Result;
 use std::time::Duration;
@@ -19,6 +21,12 @@ impl JobworkerpClientImpl {
     pub async fn init_grpc_connection(&self) -> Result<()> {
         // TODO create new conection only when connection test failed
         self.connection.reconnect().await
+    }
+    pub async fn worker_schema_client(
+        &self,
+    ) -> WorkerSchemaServiceClient<tonic::transport::Channel> {
+        let cell = self.connection.read_channel().await;
+        WorkerSchemaServiceClient::new(cell.clone())
     }
     pub async fn worker_client(&self) -> WorkerServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
