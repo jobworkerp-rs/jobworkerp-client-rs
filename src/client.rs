@@ -9,11 +9,11 @@ use crate::jobworkerp::service::{
 use anyhow::Result;
 use std::time::Duration;
 
-pub struct JobworkerpClientImpl {
+pub struct JobworkerpClient {
     connection: GrpcConnection,
 }
 
-impl JobworkerpClientImpl {
+impl JobworkerpClient {
     pub async fn new(addr: String, request_timeout: Duration) -> Result<Self> {
         let con = GrpcConnection::new(addr, request_timeout).await?;
         Ok(Self { connection: con })
