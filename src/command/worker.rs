@@ -45,7 +45,7 @@ pub enum WorkerCommand {
         periodic: u32,
         #[clap(short, long)]
         channel: Option<String>,
-        #[clap(short, long, value_parser = QueueTypeArg::parse, default_value = "HYBRID")]
+        #[clap(short, long, value_parser = QueueTypeArg::parse, default_value = "NORMAL")]
         queue_type: QueueTypeArg,
         #[clap(short, long, value_parser = ResponseTypeArg::parse, default_value = "DIRECT")]
         response_type: ResponseTypeArg,
@@ -103,16 +103,16 @@ pub enum WorkerCommand {
 
 #[derive(ValueEnum, Debug, Clone)]
 pub enum QueueTypeArg {
-    Redis,
-    Rdb,
-    Hybrid,
+    Normal,
+    ForcedRdb,
+    WithBackup,
 }
 impl QueueTypeArg {
     fn parse(s: &str) -> Result<Self> {
         match s {
-            "REDIS" => Ok(Self::Redis),
-            "RDB" => Ok(Self::Rdb),
-            "HYBRID" => Ok(Self::Hybrid),
+            "NORMAL" => Ok(Self::Normal),
+            "FORCED_RDB" => Ok(Self::ForcedRdb),
+            "WITH_BACKUP" => Ok(Self::WithBackup),
             _ => Err(anyhow!("unknown queue type: {}", s)),
         }
     }
@@ -170,9 +170,9 @@ impl WorkerCommand {
                     periodic_interval: *periodic,
                     channel: channel.clone(),
                     queue_type: match queue_type {
-                        QueueTypeArg::Redis => QueueType::Redis as i32,
-                        QueueTypeArg::Rdb => QueueType::Rdb as i32,
-                        QueueTypeArg::Hybrid => QueueType::Hybrid as i32,
+                        QueueTypeArg::Normal => QueueType::Normal as i32,
+                        QueueTypeArg::ForcedRdb => QueueType::ForcedRdb as i32,
+                        QueueTypeArg::WithBackup => QueueType::WithBackup as i32,
                     },
                     response_type: match response_type {
                         ResponseTypeArg::NoResult => ResponseType::NoResult as i32,
@@ -219,10 +219,15 @@ impl WorkerCommand {
                     })
                     .await
                     .unwrap();
+                println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
                 while let Some(worker) = data.message().await.unwrap() {
                     print_worker(client, worker).await.unwrap();
                 }
+                println!(
+                    "trailers: {:#?}",
+                    data.trailers().await.unwrap().unwrap_or_default()
+                );
             }
             WorkerCommand::Update {
                 id,

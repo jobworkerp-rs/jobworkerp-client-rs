@@ -7,12 +7,15 @@
 // -p, --priority <priority> priority of the job (HIGH, MIDDLE, LOW)(for enqueue)
 // -t, --timeout <timeout> timeout of the job (milli-seconds) (for enqueue)
 
+use std::str::FromStr;
+
+use super::WorkerIdOrName;
 use crate::{
     command::{job_result::JobResultCommand, worker_schema::WorkerSchemaCommand},
     jobworkerp::{
         self,
-        data::{JobId, Priority, WorkerId},
-        service::{job_request, CountCondition, FindListRequest, JobRequest},
+        data::{JobId, Priority},
+        service::{CountCondition, FindListRequest, JobRequest},
     },
 };
 use anyhow::Result;
@@ -20,8 +23,6 @@ use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::util::option::FlatMap;
 use infra_utils::infra::protobuf::ProtobufDescriptor;
-use serde::Deserialize;
-use std::str::FromStr;
 
 #[derive(Parser, Debug)]
 pub struct JobArg {
@@ -61,32 +62,6 @@ pub enum JobCommand {
     },
     Count {},
 }
-#[derive(Debug, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum WorkerIdOrName {
-    Id(i64),
-    Name(String),
-}
-impl WorkerIdOrName {
-    pub fn to_worker(&self) -> job_request::Worker {
-        match self {
-            WorkerIdOrName::Id(id) => job_request::Worker::WorkerId(WorkerId { value: *id }),
-            WorkerIdOrName::Name(name) => job_request::Worker::WorkerName(name.clone()),
-        }
-    }
-}
-
-impl FromStr for WorkerIdOrName {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(id) = s.parse::<i64>() {
-            Ok(WorkerIdOrName::Id(id))
-        } else {
-            Ok(WorkerIdOrName::Name(s.to_string()))
-        }
-    }
-}
 
 #[derive(ValueEnum, Debug, Clone)]
 pub enum PriorityArg {
@@ -115,13 +90,13 @@ impl JobCommand {
                 priority,
                 timeout,
             } => {
-                let req = worker.to_worker();
+                let req = worker.to_job_worker();
                 let (_, arg_desc, result_desc) =
                     WorkerSchemaCommand::find_descriptors_by_worker(client, req)
                         .await
                         .unwrap();
                 let request = JobRequest {
-                    worker: Some(worker.to_worker()),
+                    worker: Some(worker.to_job_worker()),
                     arg: WorkerSchemaCommand::json_to_message(arg_desc, arg.as_str()).unwrap(),
                     uniq_key: unique_key.clone(),
                     run_after_time: *run_after_time,

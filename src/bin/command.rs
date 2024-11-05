@@ -41,8 +41,8 @@ use std::time::Duration;
 struct Opts {
     #[clap(short, long, default_value = "http://localhost:9000")]
     address: String,
-    #[clap(short, long, default_value = "5000")]
-    timeout: u64,
+    #[clap(short, long)]
+    timeout: Option<u64>,
     #[clap(subcommand)]
     subcmd: SubCommand,
 }
@@ -59,7 +59,7 @@ pub(crate) enum SubCommand {
 async fn main() {
     let opts: Opts = Opts::parse();
     let address = opts.address.clone();
-    let timeout = Duration::from_millis(opts.timeout);
+    let timeout = opts.timeout.map(Duration::from_millis);
     let client = JobworkerpClient::new(address, timeout).await.unwrap();
     match opts.subcmd {
         SubCommand::WorkerSchema(cmd) => {

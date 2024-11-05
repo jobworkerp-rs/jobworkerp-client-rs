@@ -1,6 +1,11 @@
+use std::str::FromStr;
+
+use super::WorkerIdOrName;
 use crate::jobworkerp;
 use crate::jobworkerp::data::{JobId, JobResultId, Worker, WorkerSchema};
-use crate::jobworkerp::service::{CountCondition, FindListRequest, WorkerNameRequest};
+use crate::jobworkerp::service::{
+    CountCondition, FindListRequest, ListenRequest, WorkerNameRequest,
+};
 use chrono::DateTime;
 use clap::Parser;
 use infra_utils::infra::protobuf::ProtobufDescriptor;
@@ -17,6 +22,14 @@ pub enum JobResultCommand {
     Find {
         #[clap(short, long)]
         id: i64,
+    },
+    Listen {
+        #[clap(short, long)]
+        job_id: i64,
+        #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
+        worker: WorkerIdOrName,
+        #[clap(short, long)]
+        timeout: Option<u64>,
     },
     List {
         #[clap(short, long)]
@@ -42,6 +55,25 @@ impl JobResultCommand {
                 let id = JobResultId { value: *id };
                 let response = client.job_result_client().await.find(id).await.unwrap();
                 println!("{:#?}", response);
+            }
+            JobResultCommand::Listen {
+                job_id,
+                worker,
+                timeout,
+            } => {
+                let req = ListenRequest {
+                    job_id: Some(JobId { value: *job_id }),
+                    worker: Some(worker.to_listen_worker()),
+                    timeout: *timeout,
+                };
+                let response = client
+                    .job_result_client()
+                    .await
+                    .listen(req)
+                    .await
+                    .unwrap()
+                    .into_inner();
+                Self::print_job_result_with_request(client, response).await;
             }
             JobResultCommand::List { offset, limit } => {
                 let request = FindListRequest {
@@ -153,7 +185,7 @@ impl JobResultCommand {
             data: Some(rdata),
         } = job_result
         {
-            println!("[job_result]:\n [id] {}", &rid.value);
+            println!("[job_result]:\n\t[id] {}", &rid.value);
             println!("\t[worker]: {}", &rdata.worker_name);
             println!(
                 "\t[job id]: {}",

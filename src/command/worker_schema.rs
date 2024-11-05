@@ -67,16 +67,21 @@ impl WorkerSchemaCommand {
                     offset: *offset,
                     limit: *limit,
                 };
-                let mut response = client
+                let response = client
                     .worker_schema_client()
                     .await
                     .find_list(request)
                     .await
-                    .unwrap()
-                    .into_inner();
-                while let Some(data) = response.message().await.unwrap() {
+                    .unwrap();
+                println!("meta: {:#?}", response.metadata());
+                let mut data = response.into_inner();
+                while let Some(data) = data.message().await.unwrap() {
                     Self::print_worker_schema(&data);
                 }
+                println!(
+                    "trailer: {:#?}",
+                    data.trailers().await.unwrap().unwrap_or_default()
+                );
             }
             WorkerSchemaCommand::Delete { id } => {
                 let id = WorkerSchemaId { value: *id };

@@ -9,8 +9,13 @@ pub struct GrpcConnection {
 }
 
 impl GrpcConnection {
-    pub async fn new(addr: String, request_timeout: Duration) -> Result<Self> {
-        let endpoint = Endpoint::try_from(addr)?.timeout(request_timeout);
+    pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
+        let endpoint = if let Some(timeout) = request_timeout {
+            Endpoint::try_from(addr)?.timeout(timeout)
+        } else {
+            Endpoint::try_from(addr)?
+        };
+
         let channel = Arc::new(RwLock::new(endpoint.connect().await?));
         Ok(Self { endpoint, channel })
     }
