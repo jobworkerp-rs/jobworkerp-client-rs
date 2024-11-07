@@ -165,12 +165,18 @@ impl JobCommand {
             {
                 println!("[job]:\n\t[id] {}", &jid.value);
                 if let Some(wid) = jdat.worker_id {
-                    let (_, arg_proto, _) =
-                        super::resolve_protos_by_worker_id(client, &wid).await?;
                     println!("\t[worker_id] {}", &wid.value);
-                    println!("\t[arg] ");
-                    let arg = ProtobufDescriptor::get_message_from_bytes(arg_proto, &jdat.arg)?;
-                    ProtobufDescriptor::print_dynamic_message(&arg);
+                    match super::resolve_protos_by_worker_id(client, &wid).await {
+                        Ok((_, arg_proto, _)) => {
+                            let arg =
+                                ProtobufDescriptor::get_message_from_bytes(arg_proto, &jdat.arg)?;
+                            println!("\t[arg] ");
+                            ProtobufDescriptor::print_dynamic_message(&arg);
+                        }
+                        Err(e) => {
+                            println!("\t[arg (ERROR)]  {:?}", e);
+                        }
+                    }
                     println!("\t[uniq_key] {:?}", &jdat.uniq_key);
                     println!(
                         "\t[run_after_time] {}",
