@@ -126,7 +126,12 @@ impl JobResultCommand {
         client: &crate::client::JobworkerpClient,
         job_result: jobworkerp::data::JobResult,
     ) {
-        let result_proto = Self::resolve_result_proto(client, "worker_name").await;
+        let worker_name = job_result
+            .data
+            .as_ref()
+            .map(|d| d.worker_name.as_str())
+            .unwrap_or("");
+        let result_proto = Self::resolve_result_proto(client, worker_name).await;
         Self::print_job_result(&job_result, result_proto);
     }
     async fn resolve_result_proto(
@@ -207,7 +212,7 @@ impl JobResultCommand {
                     match ProtobufDescriptor::get_message_from_bytes(proto.clone(), item.as_slice())
                     {
                         Ok(mes) => {
-                            ProtobufDescriptor::print_dynamic_message(&mes);
+                            ProtobufDescriptor::print_dynamic_message(&mes, false);
                         }
                         Err(e) => {
                             println!("error: {:#?}", e);

@@ -171,7 +171,7 @@ impl JobCommand {
                             let arg =
                                 ProtobufDescriptor::get_message_from_bytes(arg_proto, &jdat.arg)?;
                             println!("\t[arg] ");
-                            ProtobufDescriptor::print_dynamic_message(&arg);
+                            ProtobufDescriptor::print_dynamic_message(&arg, false);
                         }
                         Err(e) => {
                             println!("\t[arg (ERROR)]  {:?}", e);

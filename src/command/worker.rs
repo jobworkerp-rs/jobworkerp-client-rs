@@ -330,7 +330,7 @@ impl WorkerCommand {
                 );
                 let operation = ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation)?;
                 println!("\t[operation] |");
-                ProtobufDescriptor::print_dynamic_message(&operation);
+                ProtobufDescriptor::print_dynamic_message(&operation, false);
                 println!("\t[periodic] {}", wdat.periodic_interval);
                 println!("\t[channel] {:?}", wdat.channel);
                 println!("\t[queue_type] {:?}", wdat.queue_type);
