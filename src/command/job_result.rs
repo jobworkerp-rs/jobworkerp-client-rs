@@ -2,10 +2,9 @@ use std::str::FromStr;
 
 use super::WorkerIdOrName;
 use crate::jobworkerp;
-use crate::jobworkerp::data::{JobId, JobResultId, Worker, WorkerSchema};
-use crate::jobworkerp::service::{
-    CountCondition, FindListRequest, ListenRequest, WorkerNameRequest,
-};
+use crate::jobworkerp::data::{JobId, JobResultId};
+use crate::jobworkerp::service::{CountCondition, FindListRequest, ListenRequest};
+use crate::proto::JobworkerpProto;
 use chrono::DateTime;
 use clap::Parser;
 use infra_utils::infra::protobuf::ProtobufDescriptor;
@@ -131,55 +130,8 @@ impl JobResultCommand {
             .as_ref()
             .map(|d| d.worker_name.as_str())
             .unwrap_or("");
-        let result_proto = Self::resolve_result_proto(client, worker_name).await;
+        let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
         Self::print_job_result(&job_result, result_proto);
-    }
-    async fn resolve_result_proto(
-        client: &crate::client::JobworkerpClient,
-        worker_name: &str,
-    ) -> Option<MessageDescriptor> {
-        if let Some(Worker {
-            id: Some(_wid),
-            data: Some(wdata),
-        }) = client
-            .worker_client()
-            .await
-            .find_by_name(WorkerNameRequest {
-                name: worker_name.to_string(),
-            })
-            .await
-            .unwrap()
-            .into_inner()
-            .data
-        {
-            if let Some(WorkerSchema {
-                id: Some(_sid),
-                data: Some(sdata),
-            }) = client
-                .worker_schema_client()
-                .await
-                .find(wdata.schema_id.unwrap())
-                .await
-                .unwrap()
-                .into_inner()
-                .data
-            {
-                sdata.result_output_proto.map(|p| {
-                    ProtobufDescriptor::new(&p)
-                        .unwrap()
-                        .get_messages()
-                        .first()
-                        .unwrap()
-                        .clone()
-                })
-            } else {
-                println!("schema not found: {:#?}", &wdata.schema_id);
-                None
-            }
-        } else {
-            println!("worker not found: {:#?}", &worker_name);
-            None
-        }
     }
     pub fn print_job_result(
         job_result: &jobworkerp::data::JobResult,

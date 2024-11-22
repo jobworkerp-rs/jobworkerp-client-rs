@@ -11,12 +11,13 @@ use std::str::FromStr;
 
 use super::WorkerIdOrName;
 use crate::{
-    command::{job_result::JobResultCommand, worker_schema::WorkerSchemaCommand},
+    command::job_result::JobResultCommand,
     jobworkerp::{
         self,
         data::{JobId, Priority},
-        service::{CountCondition, FindListRequest, JobRequest},
+        service::{job_request, CountCondition, FindListRequest, JobRequest},
     },
+    proto::JobworkerpProto,
 };
 use anyhow::Result;
 use chrono::DateTime;
@@ -92,12 +93,16 @@ impl JobCommand {
             } => {
                 let req = worker.to_job_worker();
                 let (_, arg_desc, result_desc) =
-                    WorkerSchemaCommand::find_descriptors_by_worker(client, req)
+                    JobworkerpProto::find_worker_schema_descriptors_by_worker(client, req)
                         .await
                         .unwrap();
                 let request = JobRequest {
                     worker: Some(worker.to_job_worker()),
-                    arg: WorkerSchemaCommand::json_to_message(arg_desc, arg.as_str()).unwrap(),
+                    arg: if let Some(arg_d) = arg_desc {
+                        JobworkerpProto::json_to_message(arg_d, arg.as_str()).unwrap()
+                    } else {
+                        arg.as_bytes().to_vec()
+                    },
                     uniq_key: unique_key.clone(),
                     run_after_time: *run_after_time,
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
@@ -166,12 +171,25 @@ impl JobCommand {
                 println!("[job]:\n\t[id] {}", &jid.value);
                 if let Some(wid) = jdat.worker_id {
                     println!("\t[worker_id] {}", &wid.value);
-                    match super::resolve_protos_by_worker_id(client, &wid).await {
+                    match JobworkerpProto::find_worker_schema_descriptors_by_worker(
+                        client,
+                        job_request::Worker::WorkerId(wid),
+                    )
+                    .await
+                    {
                         Ok((_, arg_proto, _)) => {
-                            let arg =
-                                ProtobufDescriptor::get_message_from_bytes(arg_proto, &jdat.arg)?;
-                            println!("\t[arg] ");
-                            ProtobufDescriptor::print_dynamic_message(&arg, false);
+                            if let Some(arg_proto) = arg_proto {
+                                let arg = ProtobufDescriptor::get_message_from_bytes(
+                                    arg_proto, &jdat.arg,
+                                )?;
+                                println!("\t[arg] ");
+                                ProtobufDescriptor::print_dynamic_message(&arg, false);
+                            } else {
+                                println!(
+                                    "\t[arg] {:?}",
+                                    String::from_utf8_lossy(jdat.arg.as_slice())
+                                );
+                            }
                         }
                         Err(e) => {
                             println!("\t[arg (ERROR)]  {:?}", e);

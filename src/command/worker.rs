@@ -13,12 +13,12 @@
 // --use-static <bool> use static worker (for create, update) (default: false)
 
 use crate::{
-    command::worker_schema::WorkerSchemaCommand,
     jobworkerp::{
         self,
         data::{QueueType, ResponseType, WorkerData, WorkerId, WorkerSchemaId},
         service::CountCondition,
     },
+    proto::JobworkerpProto,
 };
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
@@ -151,18 +151,29 @@ impl WorkerCommand {
                 next_workers,
                 use_static,
             } => {
-                let (ope_desc, _, _) = WorkerSchemaCommand::find_descriptors(
+                let operation = match JobworkerpProto::find_worker_operation_descriptors(
                     client,
                     WorkerSchemaId { value: *schema_id },
                 )
                 .await
-                .unwrap();
-                let operation = WorkerSchemaCommand::json_to_message(ope_desc, operation.as_str())
-                    .map_err(|e| {
-                        println!("failed to parse operation json to message: {:?}", e);
+                {
+                    Ok(Some(ope_desc)) => {
+                        JobworkerpProto::json_to_message(ope_desc, operation.as_str())
+                            .map_err(|e| {
+                                println!("failed to parse operation json to message: {:?}", e);
+                                exit(0x0100);
+                            })
+                            .unwrap()
+                    }
+                    Ok(None) => {
+                        // empty schema means string argument as Vec<u8>
+                        operation.as_bytes().to_vec()
+                    }
+                    Err(e) => {
+                        println!("failed to find worker schema: {:?}", e);
                         exit(0x0100);
-                    })
-                    .unwrap();
+                    }
+                };
                 let request = WorkerData {
                     name: name.clone(),
                     schema_id: Some(WorkerSchemaId { value: *schema_id }),
@@ -320,17 +331,27 @@ impl WorkerCommand {
                 data: Some(wdat),
             } = worker.clone()
             {
-                let (op, _, _) =
-                    WorkerSchemaCommand::find_descriptors(client, wdat.schema_id.unwrap()).await?;
+                let op = JobworkerpProto::find_worker_operation_descriptors(
+                    client,
+                    wdat.schema_id.unwrap(),
+                )
+                .await?;
                 println!("[worker]:\n\t[id] {}", &wid.value);
                 println!("\t[name] {}", &wdat.name);
                 println!(
                     "\t[schema_id] {}",
                     wdat.schema_id.map(|s| s.value).unwrap_or_default()
                 );
-                let operation = ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation)?;
-                println!("\t[operation] |");
-                ProtobufDescriptor::print_dynamic_message(&operation, false);
+                if let Some(op) = op {
+                    let op = ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation)?;
+                    println!("\t[operation] |");
+                    ProtobufDescriptor::print_dynamic_message(&op, false);
+                } else {
+                    println!(
+                        "\t[operation] {}",
+                        String::from_utf8_lossy(wdat.operation.as_slice())
+                    );
+                }
                 println!("\t[periodic] {}", wdat.periodic_interval);
                 println!("\t[channel] {:?}", wdat.channel);
                 println!("\t[queue_type] {:?}", wdat.queue_type);

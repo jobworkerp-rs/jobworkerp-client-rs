@@ -7,5 +7,6 @@ pub mod jobworkerp {
     }
 }
 pub mod client;
-pub mod grpc;
 pub mod command;
+pub mod grpc;
+pub mod proto;
