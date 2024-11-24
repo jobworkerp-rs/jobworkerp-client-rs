@@ -33,7 +33,10 @@ impl JobworkerpProto {
             let operation_descriptor = Self::parse_operation_schema_descriptor(&schema)?;
             Ok(operation_descriptor)
         } else {
-            Err(anyhow::anyhow!("schema not found"))
+            Err(anyhow::anyhow!(
+                "schema not found: schema_id = {}",
+                schema_id.value
+            ))
         }
     }
     pub async fn find_worker_schema_descriptors(

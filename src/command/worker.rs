@@ -22,7 +22,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
-use command_utils::util::option::FlatMap;
+use command_utils::util::{option::FlatMap, result::ToOption};
 use infra_utils::infra::protobuf::ProtobufDescriptor;
 use std::process::exit;
 
@@ -335,7 +335,9 @@ impl WorkerCommand {
                     client,
                     wdat.schema_id.unwrap(),
                 )
-                .await?;
+                .await
+                .to_option()
+                .flatten();
                 println!("[worker]:\n\t[id] {}", &wid.value);
                 println!("\t[name] {}", &wdat.name);
                 println!(
