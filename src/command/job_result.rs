@@ -3,7 +3,9 @@ use std::str::FromStr;
 use super::WorkerIdOrName;
 use crate::jobworkerp;
 use crate::jobworkerp::data::{JobId, JobResultId};
-use crate::jobworkerp::service::{CountCondition, FindListRequest, ListenRequest};
+use crate::jobworkerp::service::{
+    CountCondition, FindListRequest, ListenRequest, ListenStreamByWorkerRequest,
+};
 use crate::proto::JobworkerpProto;
 use chrono::DateTime;
 use clap::Parser;
@@ -29,6 +31,10 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
+    },
+    ListenStream {
+        #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
+        worker: WorkerIdOrName,
     },
     List {
         #[clap(short, long)]
@@ -73,6 +79,22 @@ impl JobResultCommand {
                     .unwrap()
                     .into_inner();
                 Self::print_job_result_with_request(client, response).await;
+            }
+            JobResultCommand::ListenStream { worker } => {
+                let req = ListenStreamByWorkerRequest {
+                    worker: Some(worker.to_listen_stream_worker()),
+                };
+                let mut response = client
+                    .job_result_client()
+                    .await
+                    .listen_stream_by_worker(req)
+                    .await
+                    .unwrap()
+                    .into_inner();
+                println!("listening... (Ctrl+C to stop)");
+                while let Some(res) = response.message().await.unwrap() {
+                    Self::print_job_result_with_request(client, res).await;
+                }
             }
             JobResultCommand::List { offset, limit } => {
                 let request = FindListRequest {
@@ -176,6 +198,8 @@ impl JobResultCommand {
                     println!("\t[output]: |\n {}", String::from_utf8_lossy(item));
                 }
             }
+            // flush stdout
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
         }
         // .unwrap_or_else(|| {
         //     println!("result: None: {:#?}", &job_result.id);

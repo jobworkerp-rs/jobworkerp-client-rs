@@ -170,13 +170,16 @@ impl JobworkerpProto {
                 .into_inner()
                 .data
             {
-                sdata.result_output_proto.map(|p| {
-                    ProtobufDescriptor::new(&p)
-                        .unwrap()
-                        .get_messages()
-                        .first()
-                        .unwrap()
-                        .clone()
+                sdata.result_output_proto.and_then(|p| {
+                    if p.trim().is_empty() {
+                        None
+                    } else {
+                        ProtobufDescriptor::new(&p)
+                            .unwrap()
+                            .get_messages()
+                            .first()
+                            .cloned()
+                    }
                 })
             } else {
                 println!("schema not found: {:#?}", &wdata.schema_id);
