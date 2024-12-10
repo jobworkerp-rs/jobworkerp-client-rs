@@ -22,8 +22,8 @@ use crate::{
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
+use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::option::FlatMap;
-use infra_utils::infra::protobuf::ProtobufDescriptor;
 
 #[derive(Parser, Debug)]
 pub struct JobArg {

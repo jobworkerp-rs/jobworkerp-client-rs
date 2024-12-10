@@ -22,8 +22,8 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
+use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::{option::FlatMap, result::ToOption};
-use infra_utils::infra::protobuf::ProtobufDescriptor;
 use std::process::exit;
 
 #[derive(Parser, Debug)]

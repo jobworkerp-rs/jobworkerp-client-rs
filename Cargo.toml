@@ -14,7 +14,6 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
-infra-utils = { git = "https://github.com/sutr-app/infra-utils.git", branch = "main" }
 once_cell = "1"
 prost = "0.13"
 prost-types = "0.13"

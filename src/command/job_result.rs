@@ -9,7 +9,7 @@ use crate::jobworkerp::service::{
 use crate::proto::JobworkerpProto;
 use chrono::DateTime;
 use clap::Parser;
-use infra_utils::infra::protobuf::ProtobufDescriptor;
+use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 
 #[derive(Parser, Debug)]

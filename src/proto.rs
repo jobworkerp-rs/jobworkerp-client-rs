@@ -8,8 +8,8 @@ use crate::{
     },
 };
 use anyhow::Result;
+use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::option::FlatMap;
-use infra_utils::infra::protobuf::ProtobufDescriptor;
 use prost::Message;
 use prost_reflect::{DynamicMessage, MessageDescriptor};
 use serde_json::Deserializer;
