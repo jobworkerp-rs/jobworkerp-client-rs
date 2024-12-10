@@ -9,4 +9,5 @@ pub mod jobworkerp {
 pub mod client;
 pub mod command;
 pub mod grpc;
+pub mod plugins;
 pub mod proto;

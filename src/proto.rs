@@ -1,4 +1,4 @@
-use crate::jobworkerp::data::{Worker, WorkerSchema};
+use crate::jobworkerp::data::{JobResultData, Worker, WorkerSchema};
 use crate::jobworkerp::service::WorkerNameRequest;
 use crate::{
     client::JobworkerpClient,
@@ -189,5 +189,57 @@ impl JobworkerpProto {
             println!("worker not found: {:#?}", &worker_name);
             None
         }
+    }
+    pub async fn resolve_result_output_to_string(
+        client: &crate::client::JobworkerpClient,
+        worker_name: &str,
+        result_data: &JobResultData,
+    ) -> Result<String> {
+        let output_text: String = match result_data.output.as_ref() {
+            Some(output) if !output.items.is_empty() && !output.items[0].is_empty() => {
+                let result_proto =
+                    JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                if let Some(proto) = result_proto.as_ref() {
+                    let mut output_text = "".to_string();
+                    for item in output.items.iter() {
+                        if item.is_empty() {
+                            continue;
+                        }
+                        match ProtobufDescriptor::get_message_from_bytes(
+                            proto.clone(),
+                            item.as_slice(),
+                        ) {
+                            Ok(mes) => {
+                                output_text = output_text
+                                    + ProtobufDescriptor::dynamic_message_to_string(&mes, false)
+                                        .as_str();
+                            }
+                            Err(e) => {
+                                output_text = output_text
+                                    + format!("protobuf decode error: {:#?}", e).as_str();
+                            }
+                        }
+                    }
+                    output_text
+                } else if !output.items.is_empty() && !output.items[0].is_empty() {
+                    output
+                        .items
+                        .iter()
+                        .map(|s| String::from_utf8_lossy(&s).into_owned())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    "".to_string()
+                }
+            }
+            Some(output) => output
+                .items
+                .iter()
+                .map(|s| String::from_utf8_lossy(s))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => "".to_string(),
+        };
+        Ok(output_text)
     }
 }
