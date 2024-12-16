@@ -1,6 +1,6 @@
 use crate::grpc::GrpcConnection;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, ResultStatus, Worker, WorkerData, WorkerSchema, WorkerSchemaId,
+    JobResultData, Priority, ResultStatus, Worker, WorkerData, WorkerSchema,
 };
 use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,

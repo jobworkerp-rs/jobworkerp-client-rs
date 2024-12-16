@@ -9,7 +9,6 @@ use crate::{
 };
 use anyhow::Result;
 use command_utils::protobuf::ProtobufDescriptor;
-use command_utils::util::option::FlatMap;
 use prost::Message;
 use prost_reflect::{DynamicMessage, MessageDescriptor};
 use serde_json::Deserializer;
@@ -28,7 +27,7 @@ impl JobworkerpProto {
             .await?
             .into_inner()
             .data
-            .flat_map(|r| r.data);
+            .and_then(|r| r.data);
         if let Some(schema) = response {
             let operation_descriptor = Self::parse_operation_schema_descriptor(&schema)?;
             Ok(operation_descriptor)
@@ -54,14 +53,17 @@ impl JobworkerpProto {
             .await?
             .into_inner()
             .data
-            .flat_map(|r| r.data);
+            .and_then(|r| r.data);
         if let Some(schema) = response {
             let operation_descriptor = Self::parse_operation_schema_descriptor(&schema)?;
             let arg_descriptor = Self::parse_arg_schema_descriptor(&schema)?;
             let result_descriptor = Self::parse_result_schema_descriptor(&schema)?;
             Ok((operation_descriptor, arg_descriptor, result_descriptor))
         } else {
-            Err(anyhow::anyhow!("schema not found"))
+            Err(anyhow::anyhow!(
+                "worker schema not found: schema_id = {}",
+                schema_id.value
+            ))
         }
     }
     pub async fn find_worker_schema_descriptors_by_worker(
@@ -72,7 +74,7 @@ impl JobworkerpProto {
         Option<MessageDescriptor>,
         Option<MessageDescriptor>,
     )> {
-        let schema_id = match worker {
+        let schema_id = match worker.clone() {
             job_request::Worker::WorkerId(id) => client.worker_client().await.find(id).await?,
             job_request::Worker::WorkerName(name) => {
                 client
@@ -84,8 +86,8 @@ impl JobworkerpProto {
         }
         .into_inner()
         .data
-        .flat_map(|r| r.data.flat_map(|r| r.schema_id))
-        .ok_or(anyhow::anyhow!("schema not found"))?;
+        .and_then(|r| r.data.and_then(|r| r.schema_id))
+        .ok_or(anyhow::anyhow!("schema not found: worker: {:?}", &worker))?;
         Self::find_worker_schema_descriptors(client, schema_id).await
     }
     pub fn json_to_message(descriptor: MessageDescriptor, json_str: &str) -> Result<Vec<u8>> {
@@ -158,6 +160,7 @@ impl JobworkerpProto {
             .into_inner()
             .data
         {
+            tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
             if let Some(WorkerSchema {
                 id: Some(_sid),
                 data: Some(sdata),
@@ -170,23 +173,24 @@ impl JobworkerpProto {
                 .into_inner()
                 .data
             {
+                tracing::debug!("worker {} schema found: {:#?}", worker_name, &sdata);
                 sdata.result_output_proto.and_then(|p| {
                     if p.trim().is_empty() {
                         None
                     } else {
+                        tracing::debug!("protobuf output proto decode: {:#?}", &p);
                         ProtobufDescriptor::new(&p)
-                            .unwrap()
-                            .get_messages()
-                            .first()
-                            .cloned()
+                            .inspect_err(|e| tracing::warn!("protobuf decode error: {:#?}", e))
+                            .ok()
+                            .and_then(|d| d.get_messages().first().cloned())
                     }
                 })
             } else {
-                println!("schema not found: {:#?}", &wdata.schema_id);
+                tracing::warn!("schema not found: {:#?}", &wdata.schema_id);
                 None
             }
         } else {
-            println!("worker not found: {:#?}", &worker_name);
+            tracing::warn!("worker not found: {:#?}", &worker_name);
             None
         }
     }
@@ -205,23 +209,28 @@ impl JobworkerpProto {
                         if item.is_empty() {
                             continue;
                         }
+                        tracing::debug!(
+                            "protobuf decode item: {}, worker: {}",
+                            item.len(),
+                            worker_name
+                        );
                         match ProtobufDescriptor::get_message_from_bytes(
                             proto.clone(),
                             item.as_slice(),
                         ) {
                             Ok(mes) => {
-                                output_text = output_text
-                                    + ProtobufDescriptor::dynamic_message_to_string(&mes, false)
+                                output_text +=
+                                    ProtobufDescriptor::dynamic_message_to_string(&mes, false)
                                         .as_str();
                             }
                             Err(e) => {
-                                output_text = output_text
-                                    + format!("protobuf decode error: {:#?}", e).as_str();
+                                output_text += format!("protobuf decode error: {:#?}", e).as_str();
                             }
                         }
                     }
                     output_text
                 } else if !output.items.is_empty() && !output.items[0].is_empty() {
+                    tracing::debug!("empty proto (means raw bytes): worker={}", worker_name);
                     output
                         .items
                         .iter()
@@ -229,6 +238,7 @@ impl JobworkerpProto {
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else {
+                    tracing::debug!("empty proto, empty item: worker={}", worker_name);
                     "".to_string()
                 }
             }

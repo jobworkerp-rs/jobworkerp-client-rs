@@ -345,9 +345,15 @@ impl WorkerCommand {
                     wdat.schema_id.map(|s| s.value).unwrap_or_default()
                 );
                 if let Some(op) = op {
-                    let op = ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation)?;
-                    println!("\t[operation] |");
-                    ProtobufDescriptor::print_dynamic_message(&op, false);
+                    match ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation) {
+                        Ok(msg) => {
+                            println!("\t[operation] |");
+                            ProtobufDescriptor::print_dynamic_message(&msg, false);
+                        }
+                        Err(e) => {
+                            println!("\t[operation (error)] failed to parse operation message: {:?}", e);
+                        }
+                    }
                 } else {
                     println!(
                         "\t[operation] {}",
