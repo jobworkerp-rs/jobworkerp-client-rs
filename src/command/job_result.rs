@@ -59,7 +59,14 @@ impl JobResultCommand {
             JobResultCommand::Find { id } => {
                 let id = JobResultId { value: *id };
                 let response = client.job_result_client().await.find(id).await.unwrap();
-                println!("{:#?}", response);
+                match response.into_inner().data {
+                    Some(job_res) => {
+                        Self::print_job_result_with_request(client, job_res).await;
+                    }
+                    None => {
+                        println!("job result not found: id = {}", id.value);
+                    }
+                }
             }
             JobResultCommand::Listen {
                 job_id,

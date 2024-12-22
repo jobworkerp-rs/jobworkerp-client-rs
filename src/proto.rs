@@ -7,7 +7,7 @@ use crate::{
         service::job_request,
     },
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use command_utils::protobuf::ProtobufDescriptor;
 use prost::Message;
 use prost_reflect::{DynamicMessage, MessageDescriptor};
@@ -76,13 +76,14 @@ impl JobworkerpProto {
     )> {
         let schema_id = match worker.clone() {
             job_request::Worker::WorkerId(id) => client.worker_client().await.find(id).await?,
-            job_request::Worker::WorkerName(name) => {
-                client
-                    .worker_client()
-                    .await
-                    .find_by_name(WorkerNameRequest { name })
-                    .await?
-            }
+            job_request::Worker::WorkerName(name) => client
+                .worker_client()
+                .await
+                .find_by_name(WorkerNameRequest { name })
+                .await
+                .context(
+                    "failed to find worker by name (find_worker_schema_descriptors_by_worker)",
+                )?,
         }
         .into_inner()
         .data
