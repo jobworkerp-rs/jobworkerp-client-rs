@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
 use tonic::transport::Endpoint;
@@ -11,12 +11,16 @@ pub struct GrpcConnection {
 impl GrpcConnection {
     pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
         let endpoint = if let Some(timeout) = request_timeout {
-            Endpoint::try_from(addr)?.timeout(timeout)
+            Endpoint::try_from(addr.clone())?.timeout(timeout)
         } else {
-            Endpoint::try_from(addr)?
+            Endpoint::try_from(addr.clone())?
         };
 
-        let channel = Arc::new(RwLock::new(endpoint.connect().await?));
+        let channel =
+            Arc::new(RwLock::new(endpoint.connect().await.context(format!(
+                "Failed to connect to gRPC server at {}",
+                &addr
+            ))?));
         Ok(Self { endpoint, channel })
     }
 
