@@ -1,3 +1,5 @@
+pub mod wrapper;
+
 use crate::grpc::GrpcConnection;
 use crate::jobworkerp::data::{
     JobResultData, Priority, ResultStatus, Worker, WorkerData, WorkerSchema,
