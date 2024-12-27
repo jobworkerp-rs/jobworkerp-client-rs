@@ -235,7 +235,7 @@ impl JobworkerpProto {
                     output
                         .items
                         .iter()
-                        .map(|s| String::from_utf8_lossy(&s).into_owned())
+                        .map(|s| String::from_utf8_lossy(s).into_owned())
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else {

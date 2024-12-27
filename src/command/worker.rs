@@ -16,7 +16,7 @@ use crate::{
     jobworkerp::{
         self,
         data::{QueueType, ResponseType, WorkerData, WorkerId, WorkerSchemaId},
-        service::CountCondition,
+        service::{CountCondition, WorkerNameRequest},
     },
     proto::JobworkerpProto,
 };
@@ -61,6 +61,10 @@ pub enum WorkerCommand {
     Find {
         #[clap(short, long)]
         id: i64,
+    },
+    FindByName {
+        #[clap(short, long)]
+        name: String,
     },
     List {
         #[clap(short, long)]
@@ -220,6 +224,22 @@ impl WorkerCommand {
                     println!("worker not found");
                 }
             }
+            WorkerCommand::FindByName { name } => {
+                let name = WorkerNameRequest { name: name.clone() };
+                let response = client
+                    .worker_client()
+                    .await
+                    .find_by_name(name)
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .data;
+                if let Some(worker) = response {
+                    print_worker(client, worker).await.unwrap();
+                } else {
+                    println!("worker not found");
+                }
+            }
             WorkerCommand::List { offset, limit } => {
                 let response = client
                     .worker_client()
@@ -351,7 +371,10 @@ impl WorkerCommand {
                             ProtobufDescriptor::print_dynamic_message(&msg, false);
                         }
                         Err(e) => {
-                            println!("\t[operation (error)] failed to parse operation message: {:?}", e);
+                            println!(
+                                "\t[operation (error)] failed to parse operation message: {:?}",
+                                e
+                            );
                         }
                     }
                 } else {

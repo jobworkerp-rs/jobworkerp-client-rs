@@ -61,48 +61,69 @@ pub trait UseJobworkerpClient {
     fn jobworkerp_client(&self) -> &JobworkerpClient;
 }
 
-pub trait UseJobworkerpClientHelper: UseJobworkerpClient {
-    async fn find_worker_schema_by_name(&self, name: &str) -> Result<Option<WorkerSchema>> {
-        let mut client = self.jobworkerp_client().worker_schema_client().await;
-        // TODO find by name
-        let res = client
-            .find_list(tonic::Request::new(Default::default()))
-            .await?
-            .into_inner()
-            .message()
-            .await
-            .into_iter()
-            .flatten()
-            .find(|x| x.data.as_ref().exists(|x| x.name.as_str() == name));
-        Ok(res)
-    }
-    async fn find_or_create_worker(&self, worker_data: &WorkerData) -> Result<Worker> {
-        let mut worker_cli = self.jobworkerp_client().worker_client().await;
-
-        let worker = worker_cli
-            .find_by_name(WorkerNameRequest {
-                name: worker_data.name.clone(),
-            })
-            .await?
-            .into_inner()
-            .data;
-
-        // if not found, create sentence embedding worker
-        let worker = if let Some(w) = worker {
-            w
-        } else {
-            let wid = worker_cli
-                .create(worker_data.clone())
+pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
+    fn find_worker_schema_by_name(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<WorkerSchema>>> + Send
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            let mut client = self.jobworkerp_client().worker_schema_client().await;
+            // TODO find by name
+            let res = client
+                .find_list(tonic::Request::new(Default::default()))
                 .await?
                 .into_inner()
-                .id
-                .ok_or(anyhow!("create worker response is empty?"))?;
-            Worker {
-                id: Some(wid),
-                data: Some(worker_data.to_owned()),
-            }
-        };
-        Ok(worker)
+                .message()
+                .await
+                .into_iter()
+                .flatten()
+                .find(|x| x.data.as_ref().exists(|x| x.name.as_str() == name));
+            Ok(res)
+        }
+    }
+    fn find_or_create_worker(
+        &self,
+        worker_data: &WorkerData,
+    ) -> impl std::future::Future<Output = Result<Worker>> + Send
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            let mut worker_cli = self.jobworkerp_client().worker_client().await;
+
+            let worker = worker_cli
+                .find_by_name(WorkerNameRequest {
+                    name: worker_data.name.clone(),
+                })
+                .await?
+                .into_inner()
+                .data;
+
+            // if not found, create sentence embedding worker
+            let worker = if let Some(w) = worker {
+                w
+            } else {
+                tracing::debug!(
+                    "worker {} not found. create new worker: {:?}",
+                    &worker_data.name,
+                    worker_data
+                );
+                let wid = worker_cli
+                    .create(worker_data.clone())
+                    .await?
+                    .into_inner()
+                    .id
+                    .ok_or(anyhow!("create worker response is empty?"))?;
+                Worker {
+                    id: Some(wid),
+                    data: Some(worker_data.to_owned()),
+                }
+            };
+            Ok(worker)
+        }
     }
 
     // enqueue job and get result data for worker
