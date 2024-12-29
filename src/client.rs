@@ -11,10 +11,13 @@ use crate::jobworkerp::service::{
     worker_schema_service_client::WorkerSchemaServiceClient,
     worker_service_client::WorkerServiceClient,
 };
-use crate::jobworkerp::service::{CreateJobResponse, JobRequest, WorkerNameRequest};
+use crate::jobworkerp::service::{
+    CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
+};
 use anyhow::{anyhow, Context, Result};
 use command_utils::util::option::Exists;
 use std::time::Duration;
+use tokio_stream::StreamExt;
 
 pub struct JobworkerpClient {
     connection: GrpcConnection,
@@ -72,16 +75,24 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         async move {
             let mut client = self.jobworkerp_client().worker_schema_client().await;
             // TODO find by name
-            let res = client
-                .find_list(tonic::Request::new(Default::default()))
+            let mut stream = client
+                .find_list(tonic::Request::new(FindListRequest {
+                    limit: None,
+                    offset: None,
+                }))
                 .await?
-                .into_inner()
-                .message()
-                .await
-                .into_iter()
-                .flatten()
-                .find(|x| x.data.as_ref().exists(|x| x.name.as_str() == name));
-            Ok(res)
+                .into_inner();
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(item) => {
+                        if item.data.as_ref().exists(|d| d.name == name) {
+                            return Ok(Some(item));
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(None)
         }
     }
     fn find_or_create_worker(
