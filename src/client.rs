@@ -36,27 +36,27 @@ impl JobworkerpClient {
         &self,
     ) -> WorkerSchemaServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        WorkerSchemaServiceClient::new(cell.clone())
+        WorkerSchemaServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn worker_client(&self) -> WorkerServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        WorkerServiceClient::new(cell.clone())
+        WorkerServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_client(&self) -> JobServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobServiceClient::new(cell.clone())
+        JobServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_status_client(&self) -> JobStatusServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobStatusServiceClient::new(cell.clone())
+        JobStatusServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_restore_client(&self) -> JobRestoreServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobRestoreServiceClient::new(cell.clone())
+        JobRestoreServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_result_client(&self) -> JobResultServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobResultServiceClient::new(cell.clone())
+        JobResultServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
 }
 
@@ -185,6 +185,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     ) -> Result<CreateJobResponse> {
         let worker = self.find_or_create_worker(worker_data).await?;
         let mut job_cli = self.jobworkerp_client().job_client().await;
+        tracing::debug!("enqueue job for worker: {:?}", worker);
         job_cli
             .enqueue(JobRequest {
                 arg,
