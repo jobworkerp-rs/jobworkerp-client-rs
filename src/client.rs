@@ -2,7 +2,7 @@ pub mod wrapper;
 
 use crate::grpc::GrpcConnection;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, ResultStatus, Worker, WorkerData, WorkerSchema,
+    JobResultData, Priority, ResultStatus, Worker, WorkerData, WorkerId, WorkerSchema,
 };
 use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,
@@ -117,11 +117,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             let worker = if let Some(w) = worker {
                 w
             } else {
-                tracing::debug!(
-                    "worker {} not found. create new worker: {:?}",
-                    &worker_data.name,
-                    worker_data
-                );
+                tracing::debug!("worker {} not found. create new worker", &worker_data.name,);
                 let wid = worker_cli
                     .create(worker_data.clone())
                     .await?
@@ -185,7 +181,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     ) -> Result<CreateJobResponse> {
         let worker = self.find_or_create_worker(worker_data).await?;
         let mut job_cli = self.jobworkerp_client().job_client().await;
-        tracing::debug!("enqueue job for worker: {:?}", worker);
         job_cli
             .enqueue(JobRequest {
                 arg,
@@ -199,5 +194,52 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             .await
             .map(|r| r.into_inner())
             .context("enqueue_worker_job")
+    }
+    // enqueue job for worker and get output data
+    async fn enqueue_job_and_get_output(
+        &self,
+        worker_id: &WorkerId,
+        arg: Vec<u8>,
+        timeout_sec: u32,
+    ) -> Result<Vec<u8>> {
+        let mut job_cli = self.jobworkerp_client().job_client().await;
+        let res = job_cli
+            .enqueue(JobRequest {
+                arg,
+                timeout: Some((timeout_sec * 1000).into()),
+                worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
+                    worker_id.clone(),
+                )),
+                priority: Some(Priority::High as i32), // higher priority for user slack response
+                ..Default::default()
+            })
+            .await
+            .map(|r| r.into_inner())
+            .context("enqueue_worker_job")?
+            .result
+            .ok_or(anyhow!("result not found"))?
+            .data
+            .ok_or(anyhow!("result data not found"))?;
+        if res.status() == ResultStatus::Success && res.output.is_some() {
+            // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
+            let output = res
+                .output
+                .as_ref()
+                .ok_or(anyhow!("job result output is empty: {:?}", res))?
+                .items
+                .first()
+                .ok_or(anyhow!("job result output first is empty: {:?}", res))?
+                .to_owned();
+            Ok(output)
+        } else {
+            Err(anyhow!(
+                "job failed: {:?}",
+                res.output.and_then(|o| o
+                    .items
+                    .first()
+                    .cloned()
+                    .map(|e| String::from_utf8_lossy(&e).into_owned()))
+            ))
+        }
     }
 }
