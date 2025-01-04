@@ -134,112 +134,120 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     }
 
     // enqueue job and get result data for worker
-    async fn enqueue_and_get_result_worker_job(
+    fn enqueue_and_get_result_worker_job(
         &self,
         worker_data: &WorkerData,
         arg: Vec<u8>,
         timeout_sec: u32,
-    ) -> Result<JobResultData> {
-        self.enqueue_worker_job(worker_data, arg, timeout_sec)
-            .await?
-            .result
-            .ok_or(anyhow!("result not found"))?
-            .data
-            .ok_or(anyhow!("result data not found"))
+    ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
+        async move {
+            self.enqueue_worker_job(worker_data, arg, timeout_sec)
+                .await?
+                .result
+                .ok_or(anyhow!("result not found"))?
+                .data
+                .ok_or(anyhow!("result data not found"))
+        }
     }
     // enqueue job and get only output data for worker
-    async fn enqueue_and_get_output_worker_job(
+    fn enqueue_and_get_output_worker_job(
         &self,
         worker_data: &WorkerData,
         arg: Vec<u8>,
         timeout_sec: u32,
-    ) -> Result<Vec<u8>> {
-        let res = self
-            .enqueue_and_get_result_worker_job(worker_data, arg, timeout_sec)
-            .await?;
-        if res.status() == ResultStatus::Success && res.output.is_some() {
-            // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
-            let output = res
-                .output
-                .as_ref()
-                .ok_or(anyhow!("job result output is empty: {:?}", res))?
-                .items
-                .first()
-                .ok_or(anyhow!("job result output first is empty: {:?}", res))?
-                .to_owned();
-            Ok(output)
-        } else {
-            Err(anyhow!("job failed: {:?}", res))
+    ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
+        async move {
+            let res = self
+                .enqueue_and_get_result_worker_job(worker_data, arg, timeout_sec)
+                .await?;
+            if res.status() == ResultStatus::Success && res.output.is_some() {
+                // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
+                let output = res
+                    .output
+                    .as_ref()
+                    .ok_or(anyhow!("job result output is empty: {:?}", res))?
+                    .items
+                    .first()
+                    .ok_or(anyhow!("job result output first is empty: {:?}", res))?
+                    .to_owned();
+                Ok(output)
+            } else {
+                Err(anyhow!("job failed: {:?}", res))
+            }
         }
     }
     // enqueue job for worker (use find_or_create_worker)
-    async fn enqueue_worker_job(
+    fn enqueue_worker_job(
         &self,
         worker_data: &WorkerData,
         arg: Vec<u8>,
         timeout_sec: u32,
-    ) -> Result<CreateJobResponse> {
-        let worker = self.find_or_create_worker(worker_data).await?;
-        let mut job_cli = self.jobworkerp_client().job_client().await;
-        job_cli
-            .enqueue(JobRequest {
-                arg,
-                timeout: Some((timeout_sec * 1000).into()),
-                worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
-                    worker.id.unwrap(),
-                )),
-                priority: Some(Priority::High as i32), // higher priority for user slack response
-                ..Default::default()
-            })
-            .await
-            .map(|r| r.into_inner())
-            .context("enqueue_worker_job")
+    ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send {
+        async move {
+            let worker = self.find_or_create_worker(worker_data).await?;
+            let mut job_cli = self.jobworkerp_client().job_client().await;
+            job_cli
+                .enqueue(JobRequest {
+                    arg,
+                    timeout: Some((timeout_sec * 1000).into()),
+                    worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
+                        worker.id.unwrap(),
+                    )),
+                    priority: Some(Priority::High as i32), // higher priority for user slack response
+                    ..Default::default()
+                })
+                .await
+                .map(|r| r.into_inner())
+                .context("enqueue_worker_job")
+        }
     }
     // enqueue job for worker and get output data
-    async fn enqueue_job_and_get_output(
+    fn enqueue_job_and_get_output(
         &self,
         worker_id: &WorkerId,
         arg: Vec<u8>,
         timeout_sec: u32,
-    ) -> Result<Vec<u8>> {
-        let mut job_cli = self.jobworkerp_client().job_client().await;
-        let res = job_cli
-            .enqueue(JobRequest {
-                arg,
-                timeout: Some((timeout_sec * 1000).into()),
-                worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
-                    worker_id.clone(),
-                )),
-                priority: Some(Priority::High as i32), // higher priority for user slack response
-                ..Default::default()
-            })
-            .await
-            .map(|r| r.into_inner())
-            .context("enqueue_worker_job")?
-            .result
-            .ok_or(anyhow!("result not found"))?
-            .data
-            .ok_or(anyhow!("result data not found"))?;
-        if res.status() == ResultStatus::Success && res.output.is_some() {
-            // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
-            let output = res
-                .output
-                .as_ref()
-                .ok_or(anyhow!("job result output is empty: {:?}", res))?
-                .items
-                .first()
-                .ok_or(anyhow!("job result output first is empty: {:?}", res))?
-                .to_owned();
-            Ok(output)
-        } else {
-            Err(anyhow!(
-                "job failed: {:?}",
-                res.output.and_then(|o| o
+    ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
+        async move {
+            let mut job_cli = self.jobworkerp_client().job_client().await;
+            let res = job_cli
+                .enqueue(JobRequest {
+                    arg,
+                    timeout: Some((timeout_sec * 1000).into()),
+                    worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
+                        *worker_id,
+                    )),
+                    priority: Some(Priority::High as i32), // higher priority for user slack response
+                    ..Default::default()
+                })
+                .await
+                .map(|r| r.into_inner())
+                .context("enqueue_worker_job")?
+                .result
+                .ok_or(anyhow!("result not found"))?
+                .data
+                .ok_or(anyhow!("result data not found"))?;
+            if res.status() == ResultStatus::Success && res.output.is_some() {
+                // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
+                let output = res
+                    .output
+                    .as_ref()
+                    .ok_or(anyhow!("job result output is empty: {:?}", res))?
                     .items
                     .first()
-                    .cloned()
-                    .map(|e| String::from_utf8_lossy(&e).into_owned()))
-            ))
+                    .ok_or(anyhow!("job result output first is empty: {:?}", res))?
+                    .to_owned();
+                Ok(output)
+            } else {
+                Err(anyhow!(
+                    "job failed: {:?}",
+                    res.output.and_then(|o| o
+                        .items
+                        .first()
+                        .cloned()
+                        .map(|e| String::from_utf8_lossy(&e).into_owned()))
+                ))
+            }
         }
     }
 }
