@@ -13,13 +13,17 @@ use anyhow::Result;
 use std::time::Duration;
 
 pub struct JobworkerpClient {
+    pub address: String,
     connection: GrpcConnection,
 }
 
 impl JobworkerpClient {
     pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
-        let con = GrpcConnection::new(addr, request_timeout).await?;
-        Ok(Self { connection: con })
+        let con = GrpcConnection::new(addr.clone(), request_timeout).await?;
+        Ok(Self {
+            address: addr,
+            connection: con,
+        })
     }
     pub async fn init_grpc_connection(&self) -> Result<()> {
         // TODO create new conection only when connection test failed
