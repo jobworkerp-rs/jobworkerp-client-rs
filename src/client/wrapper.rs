@@ -1,4 +1,5 @@
-use crate::client::{JobworkerpClient, UseJobworkerpClient, UseJobworkerpClientHelper};
+use super::helper::UseJobworkerpClientHelper;
+use crate::client::{JobworkerpClient, UseJobworkerpClient};
 use anyhow::Result;
 use std::time::Duration;
 
