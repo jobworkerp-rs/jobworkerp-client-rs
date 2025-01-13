@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::time::Duration;
 
 // jobworker client wrapper
+#[derive(Debug, Clone)]
 pub struct JobworkerpClientWrapper {
     pub jobworkerp_client: JobworkerpClient,
 }

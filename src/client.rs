@@ -11,6 +11,7 @@ use crate::jobworkerp::service::{
 use anyhow::Result;
 use std::time::Duration;
 
+#[derive(Debug, Clone)]
 pub struct JobworkerpClient {
     pub address: String,
     connection: GrpcConnection,

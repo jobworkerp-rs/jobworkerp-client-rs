@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
 use tonic::transport::Endpoint;
 
+#[derive(Debug, Clone)]
 pub struct GrpcConnection {
     endpoint: tonic::transport::Endpoint,
     channel: Arc<RwLock<tonic::transport::Channel>>,
