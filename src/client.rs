@@ -5,8 +5,7 @@ use crate::grpc::GrpcConnection;
 use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
-    job_status_service_client::JobStatusServiceClient,
-    worker_schema_service_client::WorkerSchemaServiceClient,
+    job_status_service_client::JobStatusServiceClient, runner_service_client::RunnerServiceClient,
     worker_service_client::WorkerServiceClient,
 };
 use anyhow::Result;
@@ -29,11 +28,9 @@ impl JobworkerpClient {
         // TODO create new conection only when connection test failed
         self.connection.reconnect().await
     }
-    pub async fn worker_schema_client(
-        &self,
-    ) -> WorkerSchemaServiceClient<tonic::transport::Channel> {
+    pub async fn runner_client(&self) -> RunnerServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        WorkerSchemaServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+        RunnerServiceClient::new(cell.clone())
     }
     pub async fn worker_client(&self) -> WorkerServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;

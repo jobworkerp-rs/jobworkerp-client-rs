@@ -1,4 +1,4 @@
-// as worker_schema: valid commands are find, list, delete, count
+// as runner: valid commands are find, list, delete, count
 // -i, --id <id> id of the job (for find, delete)
 // --offset <offset> offset of the list (for list)
 // --limit <limit> limit of the list (for list)
@@ -6,19 +6,19 @@
 use crate::{
     client::JobworkerpClient,
     jobworkerp::{
-        data::{WorkerSchema, WorkerSchemaId},
+        data::{Runner, RunnerId},
         service::{CountCondition, FindListRequest},
     },
 };
 use clap::Parser;
 #[derive(Parser, Debug)]
-pub struct WorkerSchemaArg {
+pub struct RunnerArg {
     #[clap(subcommand)]
-    pub cmd: WorkerSchemaCommand,
+    pub cmd: RunnerCommand,
 }
 
 #[derive(Parser, Debug)]
-pub enum WorkerSchemaCommand {
+pub enum RunnerCommand {
     Find {
         #[clap(short, long)]
         id: i64,
@@ -36,13 +36,13 @@ pub enum WorkerSchemaCommand {
     Count {},
 }
 
-impl WorkerSchemaCommand {
+impl RunnerCommand {
     pub async fn execute(&self, client: &JobworkerpClient) {
         match self {
-            WorkerSchemaCommand::Find { id } => {
-                let id = WorkerSchemaId { value: *id };
+            RunnerCommand::Find { id } => {
+                let id = RunnerId { value: *id };
                 let response = client
-                    .worker_schema_client()
+                    .runner_client()
                     .await
                     .find(id)
                     .await
@@ -50,18 +50,18 @@ impl WorkerSchemaCommand {
                     .into_inner()
                     .data;
                 if let Some(data) = response {
-                    Self::print_worker_schema(&data);
+                    Self::print_runner(&data);
                 } else {
-                    println!("schema not found");
+                    println!("runner not found");
                 }
             }
-            WorkerSchemaCommand::List { offset, limit } => {
+            RunnerCommand::List { offset, limit } => {
                 let request = FindListRequest {
                     offset: *offset,
                     limit: *limit,
                 };
                 let response = client
-                    .worker_schema_client()
+                    .runner_client()
                     .await
                     .find_list(request)
                     .await
@@ -69,26 +69,21 @@ impl WorkerSchemaCommand {
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
                 while let Some(data) = data.message().await.unwrap() {
-                    Self::print_worker_schema(&data);
+                    Self::print_runner(&data);
                 }
                 println!(
                     "trailer: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            WorkerSchemaCommand::Delete { id } => {
-                let id = WorkerSchemaId { value: *id };
-                let response = client
-                    .worker_schema_client()
-                    .await
-                    .delete(id)
-                    .await
-                    .unwrap();
+            RunnerCommand::Delete { id } => {
+                let id = RunnerId { value: *id };
+                let response = client.runner_client().await.delete(id).await.unwrap();
                 println!("{:#?}", response);
             }
-            WorkerSchemaCommand::Count {} => {
+            RunnerCommand::Count {} => {
                 let response = client
-                    .worker_schema_client()
+                    .runner_client()
                     .await
                     .count(CountCondition {})
                     .await
@@ -97,17 +92,20 @@ impl WorkerSchemaCommand {
             }
         }
     }
-    pub fn print_worker_schema(schema: &WorkerSchema) {
-        if let WorkerSchema {
+    pub fn print_runner(runner: &Runner) {
+        if let Runner {
             id: Some(_id),
             data: Some(data),
-        } = schema
+        } = runner
         {
-            println!("[worker_schema]:\n\t[id] {}", &_id.value);
+            println!("[runner]:\n\t[id] {}", &_id.value);
             println!("\t[name] {}", &data.name);
             println!("\t[runner_type] {}", &data.runner_type().as_str_name());
-            println!("\t[operation_proto] |\n---\n{}", &data.operation_proto);
-            println!("\t[job_arg_proto] |\n---\n{}", &data.job_arg_proto);
+            println!(
+                "\t[runner_settings_proto] |\n---\n{}",
+                &data.runner_settings_proto
+            );
+            println!("\t[job_args_proto] |\n---\n{}", &data.job_args_proto);
             println!(
                 "\t[result_output_proto] |\n---\n{}",
                 &data
@@ -116,7 +114,7 @@ impl WorkerSchemaCommand {
                     .unwrap_or("(None)".to_string())
             );
         } else {
-            println!("[worker_schema]:\n\tdata is empty");
+            println!("[runner]:\n\tdata is empty");
         }
     }
 }

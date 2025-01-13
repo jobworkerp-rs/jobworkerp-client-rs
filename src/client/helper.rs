@@ -1,7 +1,7 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, QueueType, ResponseType, ResultStatus, Worker, WorkerData, WorkerId,
-    WorkerSchema,
+    JobResultData, Priority, QueueType, ResponseType, ResultStatus, Runner, Worker, WorkerData,
+    WorkerId,
 };
 use crate::jobworkerp::service::{
     CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
@@ -15,15 +15,15 @@ use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
-    fn find_worker_schema_by_name(
+    fn find_runner_by_name(
         &self,
         name: &str,
-    ) -> impl std::future::Future<Output = Result<Option<WorkerSchema>>> + Send
+    ) -> impl std::future::Future<Output = Result<Option<Runner>>> + Send
     where
         Self: Send + Sync,
     {
         async move {
-            let mut client = self.jobworkerp_client().worker_schema_client().await;
+            let mut client = self.jobworkerp_client().runner_client().await;
             // TODO find by name
             let mut stream = client
                 .find_list(tonic::Request::new(FindListRequest {
@@ -87,11 +87,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     fn enqueue_and_get_result_worker_job(
         &self,
         worker_data: &WorkerData,
-        arg: Vec<u8>,
+        args: Vec<u8>,
         timeout_sec: u32,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            self.enqueue_worker_job(worker_data, arg, timeout_sec)
+            self.enqueue_worker_job(worker_data, args, timeout_sec)
                 .await?
                 .result
                 .ok_or(anyhow!("result not found"))?
@@ -103,12 +103,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     fn enqueue_and_get_output_worker_job(
         &self,
         worker_data: &WorkerData,
-        arg: Vec<u8>,
+        args: Vec<u8>,
         timeout_sec: u32,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let res = self
-                .enqueue_and_get_result_worker_job(worker_data, arg, timeout_sec)
+                .enqueue_and_get_result_worker_job(worker_data, args, timeout_sec)
                 .await?;
             if res.status() == ResultStatus::Success && res.output.is_some() {
                 // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
@@ -130,7 +130,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     fn enqueue_worker_job(
         &self,
         worker_data: &WorkerData,
-        arg: Vec<u8>,
+        args: Vec<u8>,
         timeout_sec: u32,
     ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send {
         async move {
@@ -138,7 +138,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             let mut job_cli = self.jobworkerp_client().job_client().await;
             job_cli
                 .enqueue(JobRequest {
-                    arg,
+                    args,
                     timeout: Some((timeout_sec * 1000).into()),
                     worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
                         worker.id.unwrap(),
@@ -155,14 +155,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     fn enqueue_job_and_get_output(
         &self,
         worker_id: &WorkerId,
-        arg: Vec<u8>,
+        args: Vec<u8>,
         timeout_sec: u32,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let mut job_cli = self.jobworkerp_client().job_client().await;
             let res = job_cli
                 .enqueue(JobRequest {
-                    arg,
+                    args,
                     timeout: Some((timeout_sec * 1000).into()),
                     worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
                         *worker_id,
@@ -206,44 +206,50 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     // return value is json string
     async fn setup_worker_and_enqueue_with_json(
         &self,
-        name: &str,                             // worker_schema(runner) name
-        init_arg: Option<&serde_json::Value>,   // worker operation data
-        worker_arg: Option<&serde_json::Value>, // worker data (if not exists, use default values)
-        args: &serde_json::Value,               // enqueue job args
-        job_timeout_sec: u32,                   // job timeout in seconds
+        name: &str,                                  // runner(runner) name
+        runner_settings: Option<&serde_json::Value>, // runner_settings data
+        worker_params: Option<&serde_json::Value>, // worker parameters (if not exists, use default values)
+        job_args: &serde_json::Value,              // enqueue job args
+        job_timeout_sec: u32,                      // job timeout in seconds
     ) -> Result<serde_json::Value> {
-        if let Some(WorkerSchema {
+        if let Some(Runner {
             id: Some(sid),
             data: Some(sdata),
-        }) = self.find_worker_schema_by_name(name).await?
+        }) = self.find_runner_by_name(name).await?
         {
-            let operation_descriptor = JobworkerpProto::parse_operation_schema_descriptor(&sdata)?;
-            let arg_descriptor = JobworkerpProto::parse_arg_schema_descriptor(&sdata)?;
+            let runner_settings_descriptor =
+                JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
+            let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
             let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
 
-            let operation = if let Some(ope_desc) = operation_descriptor {
-                let json = init_arg.and_then(|json| {
+            let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
+                let json = runner_settings.and_then(|json| {
                     serde_json::to_string(&json)
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize initArgs: {:#?}", e))
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
+                        })
                         .ok()
                 });
-                tracing::debug!("Operation schema exists: {:#?}", json);
+                tracing::debug!("runner settings schema exists: {:#?}", json);
                 json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
                     .unwrap_or(Ok(vec![]))
-                    .map_err(|e| anyhow::anyhow!("Failed to parse operation schema: {:#?}", e))?
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
+                    })?
             } else {
-                tracing::debug!("Operation schema empty");
+                tracing::debug!("runner settings schema empty");
                 vec![]
             };
-            let mut worker: WorkerData = if let Some(serde_json::Value::Object(obj)) = worker_arg {
+            let mut worker: WorkerData = if let Some(serde_json::Value::Object(obj)) = worker_params
+            {
                 // override values with workflow metadata
                 WorkerData {
                     name: obj
                         .get("name")
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
                         .unwrap_or_else(|| name.to_string().clone()),
-                    schema_id: Some(sid),
-                    operation,
+                    runner_id: Some(sid),
+                    runner_settings,
                     periodic_interval: 0,
                     channel: obj
                         .get("channel")
@@ -273,8 +279,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 // default values
                 WorkerData {
                     name: name.to_string().clone(),
-                    schema_id: Some(sid),
-                    operation,
+                    runner_id: Some(sid),
+                    runner_settings,
                     periodic_interval: 0,
                     channel: None,
                     queue_type: QueueType::Normal as i32,
@@ -298,15 +304,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 data: Some(wdata),
             } = self.find_or_create_worker(&worker).await?
             {
-                let serialized_args = args.to_string();
-                tracing::debug!("Worker args: {:#?}", &serialized_args);
-                let output = match if let Some(desc) = arg_descriptor {
+                let serialized_args = job_args.to_string();
+                tracing::debug!("job args: {:#?}", &serialized_args);
+                let output = match if let Some(desc) = args_descriptor {
                     JobworkerpProto::json_to_message(desc, &serialized_args)
                 } else {
                     Ok(serialized_args.as_bytes().to_vec())
                 } {
-                    Ok(arg) => {
-                        self.enqueue_job_and_get_output(&wid, arg, job_timeout_sec)
+                    Ok(args) => {
+                        self.enqueue_job_and_get_output(&wid, args, job_timeout_sec)
                             .await
                     }
                     Err(e) => {
@@ -363,7 +369,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 ))
             }
         } else {
-            Err(anyhow::anyhow!("Not found worker schema: {}", name))
+            Err(anyhow::anyhow!("Not found runner: {}", name))
         }
     }
 }

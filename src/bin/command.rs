@@ -4,13 +4,13 @@
 // command: jobworkerp-cli
 //
 // subcommands:
-// - worker_schema
+// - runner
 // - worker
 // - job
 // - job_result
 //
 // subcommands arguments:
-// - worker_schema: find, delete, count
+// - runner: find, delete, count
 // - worker: create, find, update, delete, count
 // - job: create, find, delete, count
 // - job_result: find, delete, count
@@ -31,7 +31,7 @@ use clap::Parser;
 use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
-        job::JobArg, job_result::JobResultArg, worker::WorkerArg, worker_schema::WorkerSchemaArg,
+        job::JobArg, job_result::JobResultArg, worker::WorkerArg, runner::RunnerArg,
     },
 };
 use std::time::Duration;
@@ -49,7 +49,7 @@ struct Opts {
 
 #[derive(Parser, Debug)]
 pub(crate) enum SubCommand {
-    WorkerSchema(WorkerSchemaArg),
+    Runner(RunnerArg),
     Worker(WorkerArg),
     Job(JobArg),
     JobResult(JobResultArg),
@@ -62,7 +62,7 @@ async fn main() {
     let timeout = opts.timeout.map(Duration::from_millis);
     let client = JobworkerpClient::new(address, timeout).await.unwrap();
     match opts.subcmd {
-        SubCommand::WorkerSchema(cmd) => {
+        SubCommand::Runner(cmd) => {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Worker(cmd) => {

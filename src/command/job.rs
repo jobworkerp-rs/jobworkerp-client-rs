@@ -1,7 +1,7 @@
 // as job: valid commands are enqueue, find, list, delete, count
 // -i, --id <id> id of the job (for find, delete)
 // -w, --worker <id or name> worker id or name of the job (if string, treat as name, if number, treat as id)(for enqueue)
-// --arg <arg json string> arguments of the worker runner (json string (transform to grpc message internally))
+// --args <args json string> arguments of the worker runner (json string (transform to grpc message internally))
 // -u, --unique-key <string> unique key of the job (for enqueue)
 // -r, --run-after-time <number> execute unix time (milli-seconds) of the job (for enqueue)
 // -p, --priority <priority> priority of the job (HIGH, MIDDLE, LOW)(for enqueue)
@@ -37,7 +37,7 @@ pub enum JobCommand {
         #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
         worker: WorkerIdOrName,
         #[clap(short, long)]
-        arg: String,
+        args: String,
         #[clap(short, long)]
         unique_key: Option<String>,
         #[clap(short, long)]
@@ -85,23 +85,23 @@ impl JobCommand {
         match self {
             JobCommand::Enqueue {
                 worker,
-                arg,
+                args,
                 unique_key,
                 run_after_time,
                 priority,
                 timeout,
             } => {
                 let req = worker.to_job_worker();
-                let (_, arg_desc, result_desc) =
-                    JobworkerpProto::find_worker_schema_descriptors_by_worker(client, req)
+                let (_, args_desc, result_desc) =
+                    JobworkerpProto::find_runner_descriptors_by_worker(client, req)
                         .await
                         .unwrap();
                 let request = JobRequest {
                     worker: Some(worker.to_job_worker()),
-                    arg: if let Some(arg_d) = arg_desc {
-                        JobworkerpProto::json_to_message(arg_d, arg.as_str()).unwrap()
+                    args: if let Some(args_d) = args_desc {
+                        JobworkerpProto::json_to_message(args_d, args.as_str()).unwrap()
                     } else {
-                        arg.as_bytes().to_vec()
+                        args.as_bytes().to_vec()
                     },
                     uniq_key: unique_key.clone(),
                     run_after_time: *run_after_time,
@@ -171,28 +171,28 @@ impl JobCommand {
                 println!("[job]:\n\t[id] {}", &jid.value);
                 if let Some(wid) = jdat.worker_id {
                     println!("\t[worker_id] {}", &wid.value);
-                    match JobworkerpProto::find_worker_schema_descriptors_by_worker(
+                    match JobworkerpProto::find_runner_descriptors_by_worker(
                         client,
                         job_request::Worker::WorkerId(wid),
                     )
                     .await
                     {
-                        Ok((_, arg_proto, _)) => {
-                            if let Some(arg_proto) = arg_proto {
-                                let arg = ProtobufDescriptor::get_message_from_bytes(
-                                    arg_proto, &jdat.arg,
+                        Ok((_, args_proto, _)) => {
+                            if let Some(args_proto) = args_proto {
+                                let args = ProtobufDescriptor::get_message_from_bytes(
+                                    args_proto, &jdat.args,
                                 )?;
-                                println!("\t[arg] ");
-                                ProtobufDescriptor::print_dynamic_message(&arg, false);
+                                println!("\t[args] ");
+                                ProtobufDescriptor::print_dynamic_message(&args, false);
                             } else {
                                 println!(
-                                    "\t[arg] {:?}",
-                                    String::from_utf8_lossy(jdat.arg.as_slice())
+                                    "\t[args] {:?}",
+                                    String::from_utf8_lossy(jdat.args.as_slice())
                                 );
                             }
                         }
                         Err(e) => {
-                            println!("\t[arg (ERROR)]  {:?}", e);
+                            println!("\t[args (ERROR)]  {:?}", e);
                         }
                     }
                     println!("\t[uniq_key] {:?}", &jdat.uniq_key);

@@ -1,9 +1,9 @@
-use crate::jobworkerp::data::{JobResultData, Worker, WorkerSchema};
+use crate::jobworkerp::data::{JobResultData, Runner, Worker};
 use crate::jobworkerp::service::WorkerNameRequest;
 use crate::{
     client::JobworkerpClient,
     jobworkerp::{
-        data::{WorkerSchemaData, WorkerSchemaId},
+        data::{RunnerData, RunnerId},
         service::job_request,
     },
 };
@@ -16,57 +16,63 @@ use serde_json::Deserializer;
 pub struct JobworkerpProto {}
 
 impl JobworkerpProto {
-    pub async fn find_worker_operation_descriptors(
+    pub async fn find_worker_runner_settings_descriptors(
         client: &JobworkerpClient,
-        schema_id: WorkerSchemaId,
+        runner_id: RunnerId,
     ) -> Result<Option<MessageDescriptor>> {
         let response = client
-            .worker_schema_client()
+            .runner_client()
             .await
-            .find(schema_id)
+            .find(runner_id)
             .await?
             .into_inner()
             .data
             .and_then(|r| r.data);
-        if let Some(schema) = response {
-            let operation_descriptor = Self::parse_operation_schema_descriptor(&schema)?;
-            Ok(operation_descriptor)
+        if let Some(runner_data) = response {
+            let runner_settings_descriptor =
+                Self::parse_runner_settings_schema_descriptor(&runner_data)?;
+            Ok(runner_settings_descriptor)
         } else {
             Err(anyhow::anyhow!(
-                "schema not found: schema_id = {}",
-                schema_id.value
+                "runner not found: runner_id = {}",
+                runner_id.value
             ))
         }
     }
-    pub async fn find_worker_schema_descriptors(
+    pub async fn find_runner_descriptors(
         client: &JobworkerpClient,
-        schema_id: WorkerSchemaId,
+        runner_id: RunnerId,
     ) -> Result<(
         Option<MessageDescriptor>,
         Option<MessageDescriptor>,
         Option<MessageDescriptor>,
     )> {
         let response = client
-            .worker_schema_client()
+            .runner_client()
             .await
-            .find(schema_id)
+            .find(runner_id)
             .await?
             .into_inner()
             .data
             .and_then(|r| r.data);
-        if let Some(schema) = response {
-            let operation_descriptor = Self::parse_operation_schema_descriptor(&schema)?;
-            let arg_descriptor = Self::parse_arg_schema_descriptor(&schema)?;
-            let result_descriptor = Self::parse_result_schema_descriptor(&schema)?;
-            Ok((operation_descriptor, arg_descriptor, result_descriptor))
+        if let Some(runner_data) = response {
+            let runner_settings_descriptor =
+                Self::parse_runner_settings_schema_descriptor(&runner_data)?;
+            let args_descriptor = Self::parse_job_args_schema_descriptor(&runner_data)?;
+            let result_descriptor = Self::parse_result_schema_descriptor(&runner_data)?;
+            Ok((
+                runner_settings_descriptor,
+                args_descriptor,
+                result_descriptor,
+            ))
         } else {
             Err(anyhow::anyhow!(
-                "worker schema not found: schema_id = {}",
-                schema_id.value
+                "runner not found: runner_id = {}",
+                runner_id.value
             ))
         }
     }
-    pub async fn find_worker_schema_descriptors_by_worker(
+    pub async fn find_runner_descriptors_by_worker(
         client: &JobworkerpClient,
         worker: job_request::Worker,
     ) -> Result<(
@@ -74,22 +80,20 @@ impl JobworkerpProto {
         Option<MessageDescriptor>,
         Option<MessageDescriptor>,
     )> {
-        let schema_id = match worker.clone() {
+        let runner_id = match worker.clone() {
             job_request::Worker::WorkerId(id) => client.worker_client().await.find(id).await?,
             job_request::Worker::WorkerName(name) => client
                 .worker_client()
                 .await
                 .find_by_name(WorkerNameRequest { name })
                 .await
-                .context(
-                    "failed to find worker by name (find_worker_schema_descriptors_by_worker)",
-                )?,
+                .context("failed to find worker by name (find_runner_descriptors_by_worker)")?,
         }
         .into_inner()
         .data
-        .and_then(|r| r.data.and_then(|r| r.schema_id))
-        .ok_or(anyhow::anyhow!("schema not found: worker: {:?}", &worker))?;
-        Self::find_worker_schema_descriptors(client, schema_id).await
+        .and_then(|r| r.data.and_then(|r| r.runner_id))
+        .ok_or(anyhow::anyhow!("runner not found: worker: {:?}", &worker))?;
+        Self::find_runner_descriptors(client, runner_id).await
     }
     pub fn json_to_message(descriptor: MessageDescriptor, json_str: &str) -> Result<Vec<u8>> {
         let mut deserializer = Deserializer::from_str(json_str);
@@ -97,13 +101,13 @@ impl JobworkerpProto {
         deserializer.end()?;
         Ok(dynamic_message.encode_to_vec())
     }
-    pub fn parse_operation_schema_descriptor(
-        schema: &WorkerSchemaData,
+    pub fn parse_runner_settings_schema_descriptor(
+        runner_data: &RunnerData,
     ) -> Result<Option<MessageDescriptor>> {
-        if schema.operation_proto.is_empty() {
+        if runner_data.runner_settings_proto.is_empty() {
             Ok(None)
         } else {
-            let descriptor = ProtobufDescriptor::new(&schema.operation_proto)?;
+            let descriptor = ProtobufDescriptor::new(&runner_data.runner_settings_proto)?;
             descriptor
                 .get_messages()
                 .first()
@@ -111,13 +115,13 @@ impl JobworkerpProto {
                 .ok_or_else(|| anyhow::anyhow!("message not found"))
         }
     }
-    pub fn parse_arg_schema_descriptor(
-        schema: &WorkerSchemaData,
+    pub fn parse_job_args_schema_descriptor(
+        runner_data: &RunnerData,
     ) -> Result<Option<MessageDescriptor>> {
-        if schema.job_arg_proto.is_empty() {
+        if runner_data.job_args_proto.is_empty() {
             Ok(None)
         } else {
-            let descriptor = ProtobufDescriptor::new(&schema.job_arg_proto)?;
+            let descriptor = ProtobufDescriptor::new(&runner_data.job_args_proto)?;
             descriptor
                 .get_messages()
                 .first()
@@ -126,9 +130,9 @@ impl JobworkerpProto {
         }
     }
     pub fn parse_result_schema_descriptor(
-        schema: &WorkerSchemaData,
+        runner_data: &RunnerData,
     ) -> Result<Option<MessageDescriptor>> {
-        if let Some(proto) = &schema.result_output_proto {
+        if let Some(proto) = &runner_data.result_output_proto {
             if proto.is_empty() {
                 Ok(None)
             } else {
@@ -162,19 +166,19 @@ impl JobworkerpProto {
             .data
         {
             tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
-            if let Some(WorkerSchema {
+            if let Some(Runner {
                 id: Some(_sid),
                 data: Some(sdata),
             }) = client
-                .worker_schema_client()
+                .runner_client()
                 .await
-                .find(wdata.schema_id.unwrap())
+                .find(wdata.runner_id.unwrap())
                 .await
                 .unwrap()
                 .into_inner()
                 .data
             {
-                tracing::debug!("worker {} schema found: {:#?}", worker_name, &sdata);
+                tracing::debug!("worker {}  found: {:#?}", worker_name, &sdata);
                 sdata.result_output_proto.and_then(|p| {
                     if p.trim().is_empty() {
                         None
@@ -187,7 +191,7 @@ impl JobworkerpProto {
                     }
                 })
             } else {
-                tracing::warn!("schema not found: {:#?}", &wdata.schema_id);
+                tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
                 None
             }
         } else {

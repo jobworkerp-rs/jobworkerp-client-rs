@@ -1,8 +1,8 @@
 // worker: valid commands are create, find, list, update, delete, count
 // -i, --id <number> id of the job (for find, update, delete)
 // -n, --name <string> name of the worker (for create, update)
-// -s, --schema-id <number> worker_schama id of the worker (for find, update, delete)
-// -o, --operation <operation json string> operation of the worker runner (json string (transform to grpc message internally))(for create, update)
+// -r, --runner-id <number> worker_schama id of the worker (for find, update, delete)
+// -s, --settings <runner_settings json string> runner_settings of the worker runner (json string (transform to grpc message internally))(for create, update)
 // -p, --periodic <periodic millis number> periodic of the worker runner (for create, update)(default: 0)
 // -c, --channel <string> channel of the worker runner (for create, update)(optional)
 // -q, --queue-type <queue type> queue type of the worker runner (REDIS, RDB, HYBRID) (for create, update)
@@ -15,7 +15,7 @@
 use crate::{
     jobworkerp::{
         self,
-        data::{QueueType, ResponseType, WorkerData, WorkerId, WorkerSchemaId},
+        data::{QueueType, ResponseType, WorkerData, WorkerId, RunnerId},
         service::{CountCondition, WorkerNameRequest},
     },
     proto::JobworkerpProto,
@@ -38,16 +38,16 @@ pub enum WorkerCommand {
         #[clap(short, long)]
         name: String,
         #[clap(short, long)]
-        schema_id: i64,
+        runner_id: i64,
         #[clap(short, long)]
-        operation: String,
+        settings: String,
         #[clap(short, long, default_value = "0")]
         periodic: u32,
         #[clap(short, long)]
         channel: Option<String>,
         #[clap(short, long, value_parser = QueueTypeArg::parse, default_value = "NORMAL")]
         queue_type: QueueTypeArg,
-        #[clap(short, long, value_parser = ResponseTypeArg::parse, default_value = "DIRECT")]
+        #[clap(long, value_parser = ResponseTypeArg::parse, default_value = "DIRECT")]
         response_type: ResponseTypeArg,
         #[clap(long, default_value = "false")]
         store_success: bool,
@@ -78,16 +78,16 @@ pub enum WorkerCommand {
         #[clap(short, long)]
         name: Option<String>,
         #[clap(short, long)]
-        schema_id: Option<i64>,
+        runner_id: Option<i64>,
         #[clap(short, long)]
-        operation: Option<String>,
+        settings: Option<String>,
         #[clap(short, long)]
         periodic: Option<u32>,
         #[clap(short, long)]
         channel: Option<Option<String>>,
         #[clap(short, long, value_parser = QueueTypeArg::parse)]
         queue_type: Option<QueueTypeArg>,
-        #[clap(short, long, value_parser = ResponseTypeArg::parse)]
+        #[clap(long, value_parser = ResponseTypeArg::parse)]
         response_type: Option<ResponseTypeArg>,
         #[clap(long)]
         store_success: Option<bool>,
@@ -144,8 +144,8 @@ impl WorkerCommand {
         match self {
             WorkerCommand::Create {
                 name,
-                schema_id,
-                operation,
+                runner_id,
+                settings,
                 periodic,
                 channel,
                 queue_type,
@@ -155,33 +155,37 @@ impl WorkerCommand {
                 next_workers,
                 use_static,
             } => {
-                let operation = match JobworkerpProto::find_worker_operation_descriptors(
-                    client,
-                    WorkerSchemaId { value: *schema_id },
-                )
-                .await
-                {
-                    Ok(Some(ope_desc)) => {
-                        JobworkerpProto::json_to_message(ope_desc, operation.as_str())
-                            .map_err(|e| {
-                                println!("failed to parse operation json to message: {:?}", e);
-                                exit(0x0100);
-                            })
-                            .unwrap()
-                    }
-                    Ok(None) => {
-                        // empty schema means string argument as Vec<u8>
-                        operation.as_bytes().to_vec()
-                    }
-                    Err(e) => {
-                        println!("failed to find worker schema: {:?}", e);
-                        exit(0x0100);
-                    }
-                };
+                let runner_settings =
+                    match JobworkerpProto::find_worker_runner_settings_descriptors(
+                        client,
+                        RunnerId { value: *runner_id },
+                    )
+                    .await
+                    {
+                        Ok(Some(ope_desc)) => {
+                            JobworkerpProto::json_to_message(ope_desc, settings.as_str())
+                                .map_err(|e| {
+                                    println!(
+                                        "failed to parse runner_settings json to message: {:?}",
+                                        e
+                                    );
+                                    exit(0x0100);
+                                })
+                                .unwrap()
+                        }
+                        Ok(None) => {
+                            // empty runner_settings means string argument as Vec<u8>
+                            settings.as_bytes().to_vec()
+                        }
+                        Err(e) => {
+                            println!("failed to find runner: {:?}", e);
+                            exit(0x0100);
+                        }
+                    };
                 let request = WorkerData {
                     name: name.clone(),
-                    schema_id: Some(WorkerSchemaId { value: *schema_id }),
-                    operation,
+                    runner_id: Some(RunnerId { value: *runner_id }),
+                    runner_settings,
                     periodic_interval: *periodic,
                     channel: channel.clone(),
                     queue_type: match queue_type {
@@ -263,8 +267,8 @@ impl WorkerCommand {
             WorkerCommand::Update {
                 id,
                 name,
-                schema_id,
-                operation,
+                runner_id,
+                settings,
                 periodic,
                 channel,
                 queue_type,
@@ -284,14 +288,14 @@ impl WorkerCommand {
                 let worker_opt = res.into_inner().data;
                 if let Some(mut worker_data) = worker_opt.flat_map(|w| w.data) {
                     worker_data.name = name.clone().unwrap_or(worker_data.name);
-                    worker_data.schema_id = schema_id
-                        .map(|s| WorkerSchemaId { value: s })
-                        .or(worker_data.schema_id);
-                    // TODO operation is json string and should be transformed to grpc message bytes.(use operation_proto from worker_schema)
-                    worker_data.operation = operation
+                    worker_data.runner_id = runner_id
+                        .map(|s| RunnerId { value: s })
+                        .or(worker_data.runner_id);
+                    // TODO runner_settings is json string and should be transformed to grpc message bytes.(use runner_settings_proto from runner)
+                    worker_data.runner_settings = settings
                         .clone()
                         .map(|o| o.bytes().collect())
-                        .unwrap_or(worker_data.operation.clone());
+                        .unwrap_or(worker_data.runner_settings.clone());
                     worker_data.periodic_interval =
                         periodic.unwrap_or(worker_data.periodic_interval);
                     worker_data.channel = channel.clone().unwrap_or(worker_data.channel);
@@ -351,9 +355,9 @@ impl WorkerCommand {
                 data: Some(wdat),
             } = worker.clone()
             {
-                let op = JobworkerpProto::find_worker_operation_descriptors(
+                let op = JobworkerpProto::find_worker_runner_settings_descriptors(
                     client,
-                    wdat.schema_id.unwrap(),
+                    wdat.runner_id.unwrap(),
                 )
                 .await
                 .to_option()
@@ -361,26 +365,26 @@ impl WorkerCommand {
                 println!("[worker]:\n\t[id] {}", &wid.value);
                 println!("\t[name] {}", &wdat.name);
                 println!(
-                    "\t[schema_id] {}",
-                    wdat.schema_id.map(|s| s.value).unwrap_or_default()
+                    "\t[runner_id] {}",
+                    wdat.runner_id.map(|s| s.value).unwrap_or_default()
                 );
                 if let Some(op) = op {
-                    match ProtobufDescriptor::get_message_from_bytes(op, &wdat.operation) {
+                    match ProtobufDescriptor::get_message_from_bytes(op, &wdat.runner_settings) {
                         Ok(msg) => {
-                            println!("\t[operation] |");
+                            println!("\t[runner_settings] |");
                             ProtobufDescriptor::print_dynamic_message(&msg, false);
                         }
                         Err(e) => {
                             println!(
-                                "\t[operation (error)] failed to parse operation message: {:?}",
+                                "\t[runner_settings (error)] failed to parse runner_settings message: {:?}",
                                 e
                             );
                         }
                     }
                 } else {
                     println!(
-                        "\t[operation] {}",
-                        String::from_utf8_lossy(wdat.operation.as_slice())
+                        "\t[runner_settings] {}",
+                        String::from_utf8_lossy(wdat.runner_settings.as_slice())
                     );
                 }
                 println!("\t[periodic] {}", wdat.periodic_interval);
