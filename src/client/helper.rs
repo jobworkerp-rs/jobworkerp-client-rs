@@ -204,172 +204,176 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     // if worker not exists, create worker (use temporary worker name and delete worker after process if not use_static)
     // argument is json string or plain string (serce_json::Value::String)
     // return value is json string
-    async fn setup_worker_and_enqueue_with_json(
+    fn setup_worker_and_enqueue_with_json(
         &self,
-        name: &str,                                  // runner(runner) name
-        runner_settings: Option<&serde_json::Value>, // runner_settings data
-        worker_params: Option<&serde_json::Value>, // worker parameters (if not exists, use default values)
-        job_args: &serde_json::Value,              // enqueue job args
-        job_timeout_sec: u32,                      // job timeout in seconds
-    ) -> Result<serde_json::Value> {
-        if let Some(Runner {
-            id: Some(sid),
-            data: Some(sdata),
-        }) = self.find_runner_by_name(name).await?
-        {
-            let runner_settings_descriptor =
-                JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
-            let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
-            let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
+        name: &str,                                 // runner(runner) name
+        runner_settings: Option<serde_json::Value>, // runner_settings data
+        worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
+        job_args: serde_json::Value,              // enqueue job args
+        job_timeout_sec: u32,                     // job timeout in seconds
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        let name = name.to_owned();
+        let job_args = job_args;
+        async move {
+            if let Some(Runner {
+                id: Some(sid),
+                data: Some(sdata),
+            }) = self.find_runner_by_name(name.as_str()).await?
+            {
+                let runner_settings_descriptor =
+                    JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
+                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
 
-            let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
-                let json = runner_settings.and_then(|json| {
-                    serde_json::to_string(&json)
+                let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
+                    let json = runner_settings.and_then(|json| {
+                        serde_json::to_string(&json)
+                            .map_err(|e| {
+                                anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
+                            })
+                            .ok()
+                    });
+                    tracing::debug!("runner settings schema exists: {:#?}", json);
+                    json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
+                        .unwrap_or(Ok(vec![]))
                         .map_err(|e| {
-                            anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
-                        })
-                        .ok()
-                });
-                tracing::debug!("runner settings schema exists: {:#?}", json);
-                json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
-                    .unwrap_or(Ok(vec![]))
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
-                    })?
-            } else {
-                tracing::debug!("runner settings schema empty");
-                vec![]
-            };
-            let mut worker: WorkerData = if let Some(serde_json::Value::Object(obj)) = worker_params
-            {
-                // override values with workflow metadata
-                WorkerData {
-                    name: obj
-                        .get("name")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| name.to_string().clone()),
-                    runner_id: Some(sid),
-                    runner_settings,
-                    periodic_interval: 0,
-                    channel: obj
-                        .get("channel")
-                        .and_then(|v| v.as_str().map(|s| s.to_string())),
-                    queue_type: obj
-                        .get("queue_type")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .and_then(|s| QueueType::from_str_name(&s).map(|q| q as i32))
-                        .unwrap_or(QueueType::Normal as i32),
-                    response_type: ResponseType::Direct as i32,
-                    store_success: obj
-                        .get("store_success")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    store_failure: obj
-                        .get("store_success")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true), //
-                    next_workers: vec![], // XXX use workflow task
-                    use_static: obj
-                        .get("store_success")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    retry_policy: None, //TODO
-                }
-            } else {
-                // default values
-                WorkerData {
-                    name: name.to_string().clone(),
-                    runner_id: Some(sid),
-                    runner_settings,
-                    periodic_interval: 0,
-                    channel: None,
-                    queue_type: QueueType::Normal as i32,
-                    response_type: ResponseType::Direct as i32,
-                    store_success: false,
-                    store_failure: true, //
-                    next_workers: vec![],
-                    use_static: false,
-                    retry_policy: None,
-                }
-            };
-            // random name (temporary name for not static worker)
-            if !worker.use_static {
-                let mut hasher = DefaultHasher::default();
-                hasher.write(worker.encode_to_vec().as_slice());
-                tracing::debug!("Worker hash: {}", &hasher.finish());
-                worker.name = hasher.finish().to_string();
-            }
-            if let Worker {
-                id: Some(wid),
-                data: Some(wdata),
-            } = self.find_or_create_worker(&worker).await?
-            {
-                let serialized_args = job_args.to_string();
-                tracing::debug!("job args: {:#?}", &serialized_args);
-                let output = match if let Some(desc) = args_descriptor {
-                    JobworkerpProto::json_to_message(desc, &serialized_args)
+                            anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
+                        })?
                 } else {
-                    Ok(serialized_args.as_bytes().to_vec())
-                } {
-                    Ok(args) => {
-                        self.enqueue_job_and_get_output(&wid, args, job_timeout_sec)
-                            .await
-                    }
-                    Err(e) => {
-                        tracing::warn!(
+                    tracing::debug!("runner settings schema empty");
+                    vec![]
+                };
+                let mut worker: WorkerData =
+                    if let Some(serde_json::Value::Object(obj)) = worker_params {
+                        // override values with workflow metadata
+                        WorkerData {
+                            name: obj
+                                .get("name")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                .unwrap_or_else(|| name.to_string().clone()),
+                            runner_id: Some(sid),
+                            runner_settings,
+                            periodic_interval: 0,
+                            channel: obj
+                                .get("channel")
+                                .and_then(|v| v.as_str().map(|s| s.to_string())),
+                            queue_type: obj
+                                .get("queue_type")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                .and_then(|s| QueueType::from_str_name(&s).map(|q| q as i32))
+                                .unwrap_or(QueueType::Normal as i32),
+                            response_type: ResponseType::Direct as i32,
+                            store_success: obj
+                                .get("store_success")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            store_failure: obj
+                                .get("store_success")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true), //
+                            next_workers: vec![], // XXX use workflow task
+                            use_static: obj
+                                .get("store_success")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            retry_policy: None, //TODO
+                        }
+                    } else {
+                        // default values
+                        WorkerData {
+                            name: name.to_string().clone(),
+                            runner_id: Some(sid),
+                            runner_settings,
+                            periodic_interval: 0,
+                            channel: None,
+                            queue_type: QueueType::Normal as i32,
+                            response_type: ResponseType::Direct as i32,
+                            store_success: false,
+                            store_failure: true, //
+                            next_workers: vec![],
+                            use_static: false,
+                            retry_policy: None,
+                        }
+                    };
+                // random name (temporary name for not static worker)
+                if !worker.use_static {
+                    let mut hasher = DefaultHasher::default();
+                    hasher.write(worker.encode_to_vec().as_slice());
+                    tracing::debug!("Worker hash: {}", &hasher.finish());
+                    worker.name = hasher.finish().to_string();
+                }
+                if let Worker {
+                    id: Some(wid),
+                    data: Some(wdata),
+                } = self.find_or_create_worker(&worker).await?
+                {
+                    let serialized_args = job_args.to_string();
+                    tracing::debug!("job args: {:#?}", &serialized_args);
+                    let output = match if let Some(desc) = args_descriptor {
+                        JobworkerpProto::json_to_message(desc, &serialized_args)
+                    } else {
+                        Ok(serialized_args.as_bytes().to_vec())
+                    } {
+                        Ok(args) => {
+                            self.enqueue_job_and_get_output(&wid, args, job_timeout_sec)
+                                .await
+                        }
+                        Err(e) => {
+                            tracing::warn!(
                             "Execute task failed: parsing args with schema: {:#?}, error: {:#?}",
                             &serialized_args,
                             e
                         );
-                        Err(e)
-                    }
-                };
-                // use worker one-time
-                // XXX use_static means static worker in jobworkerp, not in workflow (but use as a temporary worker or not)
-                if !wdata.use_static {
-                    let deleted = self
-                        .jobworkerp_client()
-                        .worker_client()
-                        .await
-                        .delete(wid)
-                        .await?
-                        .into_inner();
-                    if !deleted.is_success {
-                        tracing::warn!("Failed to delete worker: {:#?}", wid);
-                    }
-                }
-                // eval error after deleting worker
-                let output = output?;
-                let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
-                    match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
-                        Ok(m) => {
-                            let j = ProtobufDescriptor::message_to_json(&m)?;
-                            tracing::debug!(
-                                "Result schema exists. decode message with proto: {:#?}",
-                                j
-                            );
-                            serde_json::from_str(j.as_str())
+                            Err(e)
                         }
-                        Err(e) => {
-                            tracing::warn!("Failed to parse result schema: {:#?}", e);
-                            serde_json::from_slice(&output)
+                    };
+                    // use worker one-time
+                    // XXX use_static means static worker in jobworkerp, not in workflow (but use as a temporary worker or not)
+                    if !wdata.use_static {
+                        let deleted = self
+                            .jobworkerp_client()
+                            .worker_client()
+                            .await
+                            .delete(wid)
+                            .await?
+                            .into_inner();
+                        if !deleted.is_success {
+                            tracing::warn!("Failed to delete worker: {:#?}", wid);
                         }
                     }
+                    // eval error after deleting worker
+                    let output = output?;
+                    let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
+                        match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
+                            Ok(m) => {
+                                let j = ProtobufDescriptor::message_to_json(&m)?;
+                                tracing::debug!(
+                                    "Result schema exists. decode message with proto: {:#?}",
+                                    j
+                                );
+                                serde_json::from_str(j.as_str())
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse result schema: {:#?}", e);
+                                serde_json::from_slice(&output)
+                            }
+                        }
+                    } else {
+                        let text = String::from_utf8_lossy(&output);
+                        tracing::debug!("No result schema: {}", text);
+                        Ok(serde_json::Value::String(text.to_string()))
+                    }
+                    .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
+                    output
                 } else {
-                    let text = String::from_utf8_lossy(&output);
-                    tracing::debug!("No result schema: {}", text);
-                    Ok(serde_json::Value::String(text.to_string()))
+                    Err(anyhow::anyhow!(
+                        "Failed to find or create worker: {:#?}",
+                        worker
+                    ))
                 }
-                .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
-                output
             } else {
-                Err(anyhow::anyhow!(
-                    "Failed to find or create worker: {:#?}",
-                    worker
-                ))
+                Err(anyhow::anyhow!("Not found runner: {}", name))
             }
-        } else {
-            Err(anyhow::anyhow!("Not found runner: {}", name))
         }
     }
 }
