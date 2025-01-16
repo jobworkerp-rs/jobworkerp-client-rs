@@ -16,6 +16,18 @@ impl UseJobworkerpClient for JobworkerpClientWrapper {
 impl UseJobworkerpClientHelper for JobworkerpClientWrapper {}
 
 impl JobworkerpClientWrapper {
+    pub async fn new(
+        address: &str,
+        request_timeout_sec: Option<u32>,
+    ) -> Result<JobworkerpClientWrapper> {
+        let jobworkerp_client = JobworkerpClient::new(
+            address.to_string(),
+            request_timeout_sec.map(|s| Duration::from_secs(s.into())),
+        )
+        .await?;
+
+        Ok(JobworkerpClientWrapper { jobworkerp_client })
+    }
     pub async fn new_by_env(request_timeout_sec: Option<u32>) -> Result<JobworkerpClientWrapper> {
         let jobworkerp_client = JobworkerpClient::new(
             std::env::var("JOBWORKERP_ADDR").expect("JOBWORKERP_ADDR is not set"),

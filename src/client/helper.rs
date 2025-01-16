@@ -83,6 +83,35 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         }
     }
 
+    // fillin runner_id and enqueue job and get result data for worker
+    fn enqueue_and_get_result_worker_job_with_runner(
+        &self,
+        runner_name: &str,
+        mut worker_data: WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u32,
+    ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
+        async move {
+            let runner = self.find_runner_by_name(runner_name).await?;
+            worker_data.runner_id = runner.and_then(|r| r.id);
+            tracing::debug!("resolved runner_id: {:?}", &worker_data.runner_id);
+            let res = self
+                .enqueue_and_get_result_worker_job(&worker_data, args, timeout_sec)
+                .await?;
+            if res.status() == ResultStatus::Success {
+                Ok(res)
+            } else {
+                Err(anyhow!(
+                    "job failed: {:?}",
+                    res.output.and_then(|o| o
+                        .items
+                        .first()
+                        .cloned()
+                        .map(|e| String::from_utf8_lossy(&e).into_owned()))
+                ))
+            }
+        }
+    }
     // enqueue job and get result data for worker
     fn enqueue_and_get_result_worker_job(
         &self,
@@ -122,7 +151,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     .to_owned();
                 Ok(output)
             } else {
-                Err(anyhow!("job failed: {:?}", res))
+                Err(anyhow!(
+                    "job failed: {:?}",
+                    res.output.and_then(|o| o
+                        .items
+                        .first()
+                        .cloned()
+                        .map(|e| String::from_utf8_lossy(&e).into_owned()))
+                ))
             }
         }
     }
