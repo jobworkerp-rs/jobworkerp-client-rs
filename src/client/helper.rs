@@ -1,7 +1,6 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
     JobResultData, Priority, QueueType, ResponseType, ResultStatus, Runner, Worker, WorkerData,
-    WorkerId,
 };
 use crate::jobworkerp::service::{
     CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
@@ -190,7 +189,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     // enqueue job for worker and get output data
     fn enqueue_job_and_get_output(
         &self,
-        worker_id: &WorkerId,
+        worker: crate::jobworkerp::service::job_request::Worker,
         args: Vec<u8>,
         timeout_sec: u32,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
@@ -200,9 +199,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 .enqueue(JobRequest {
                     args,
                     timeout: Some((timeout_sec * 1000).into()),
-                    worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
-                        *worker_id,
-                    )),
+                    worker: Some(worker),
                     priority: Some(Priority::High as i32), // higher priority for user slack response
                     ..Default::default()
                 })
@@ -351,7 +348,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         Ok(serialized_args.as_bytes().to_vec())
                     } {
                         Ok(args) => {
-                            self.enqueue_job_and_get_output(&wid, args, job_timeout_sec)
+                            let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
+                            self.enqueue_job_and_get_output(w, args, job_timeout_sec)
                                 .await
                         }
                         Err(e) => {
