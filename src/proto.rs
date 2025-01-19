@@ -199,6 +199,72 @@ impl JobworkerpProto {
             None
         }
     }
+    pub async fn resolve_result_output_to_json(
+        client: &crate::client::JobworkerpClient,
+        worker_name: &str,
+        result_data: &JobResultData,
+    ) -> Result<serde_json::Value> {
+        let output_text: serde_json::Value = match result_data.output.as_ref() {
+            Some(output) if !output.items.is_empty() && !output.items[0].is_empty() => {
+                let result_proto =
+                    JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                if let Some(proto) = result_proto.as_ref() {
+                    let mut output_array = Vec::new();
+                    for item in output.items.iter() {
+                        if item.is_empty() {
+                            continue;
+                        }
+                        tracing::debug!(
+                            "protobuf decode item: {}, worker: {}",
+                            item.len(),
+                            worker_name
+                        );
+                        match ProtobufDescriptor::get_message_from_bytes(
+                            proto.clone(),
+                            item.as_slice(),
+                        ) {
+                            Ok(mes) => {
+                                // using result for warning only
+                                let _ = ProtobufDescriptor::message_to_json_value(&mes)
+                                    .map(|json| {
+                                        output_array.push(json);
+                                    })
+                                    .map_err(|e| {
+                                        tracing::warn!("protobuf decode error: {:#?}", e);
+                                    });
+                            }
+                            Err(e) => {
+                                tracing::warn!("protobuf decode error: {:#?}", e);
+                            }
+                        }
+                    }
+                    if output_array.is_empty() {
+                        serde_json::Value::String("".to_string())
+                    } else if output_array.len() == 1 {
+                        output_array[0].clone()
+                    } else {
+                        serde_json::Value::Array(output_array)
+                    }
+                } else if !output.items.is_empty() && !output.items[0].is_empty() {
+                    tracing::debug!("empty proto (means raw bytes): worker={}", worker_name);
+                    serde_json::Value::String(
+                        output
+                            .items
+                            .iter()
+                            .map(|s| String::from_utf8_lossy(s).into_owned())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
+                } else {
+                    tracing::debug!("empty proto, empty item: worker={}", worker_name);
+                    serde_json::Value::Null
+                }
+            }
+            Some(_output) => serde_json::Value::String("".to_string()),
+            None => serde_json::Value::Null,
+        };
+        Ok(output_text)
+    }
     pub async fn resolve_result_output_to_string(
         client: &crate::client::JobworkerpClient,
         worker_name: &str,

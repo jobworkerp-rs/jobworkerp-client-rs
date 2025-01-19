@@ -306,7 +306,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .unwrap_or(true), //
                             next_workers: vec![], // XXX use workflow task
                             use_static: obj
-                                .get("store_success")
+                                .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
                             retry_policy: None, //TODO
