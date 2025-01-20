@@ -146,7 +146,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     .ok_or(anyhow!("job result output is empty: {:?}", res))?
                     .items
                     .first()
-                    .ok_or(anyhow!("job result output first is empty: {:?}", res))?
+                    .ok_or(anyhow!(
+                        "{} job result output first is empty: {:?}",
+                        &worker_data.name,
+                        res
+                    ))?
                     .to_owned();
                 Ok(output)
             } else {
@@ -332,7 +336,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 if !worker.use_static {
                     let mut hasher = DefaultHasher::default();
                     hasher.write(worker.encode_to_vec().as_slice());
-                    tracing::debug!("Worker hash: {}", &hasher.finish());
+                    tracing::debug!("Worker {}, hash: {}", &worker.name, &hasher.finish());
                     worker.name = hasher.finish().to_string();
                 }
                 if let Worker {
@@ -354,7 +358,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         }
                         Err(e) => {
                             tracing::warn!(
-                            "Execute task failed: parsing args with schema: {:#?}, error: {:#?}",
+                            "Execute task failed: parsing args with json(or plain) str: {:#?}, error: {:#?}",
                             &serialized_args,
                             e
                         );
