@@ -25,6 +25,7 @@ prost-reflect-build = "0.14"
 #    "std",
 #    "tls12",
 #] }
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }

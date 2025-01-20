@@ -335,10 +335,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 // random name (temporary name for not static worker)
                 if !worker.use_static {
                     let mut hasher = DefaultHasher::default();
+                    hasher.write_i64(rand::random()); // random
                     hasher.write(worker.encode_to_vec().as_slice());
                     tracing::debug!("Worker {}, hash: {}", &worker.name, &hasher.finish());
                     worker.name = hasher.finish().to_string();
                 }
+                // TODO unwind and delete not static worker if failed to enqueue job
                 if let Worker {
                     id: Some(wid),
                     data: Some(wdata),
