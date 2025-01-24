@@ -8,6 +8,7 @@ use crate::jobworkerp::service::{
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
 use command_utils::protobuf::ProtobufDescriptor;
+use command_utils::util::datetime;
 use command_utils::util::option::Exists;
 use prost::Message;
 use std::hash::{DefaultHasher, Hasher};
@@ -241,45 +242,23 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     // if worker not exists, create worker (use temporary worker name and delete worker after process if not use_static)
     // argument is json string or plain string (serce_json::Value::String)
     // return value is json string
-    fn setup_worker_and_enqueue_with_json(
+    fn setup_worker_and_enqueue(
         &self,
-        name: &str,                                 // runner(runner) name
-        runner_settings: Option<serde_json::Value>, // runner_settings data
+        name: &str,                               // runner(runner) name
+        runner_settings: Vec<u8>,                 // runner_settings data
         worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
-        job_args: serde_json::Value,              // enqueue job args
+        job_args: Vec<u8>,                        // enqueue job args
         job_timeout_sec: u32,                     // job timeout in seconds
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         let name = name.to_owned();
-        let job_args = job_args;
+        // let job_args = job_args;
         async move {
             if let Some(Runner {
                 id: Some(sid),
                 data: Some(sdata),
             }) = self.find_runner_by_name(name.as_str()).await?
             {
-                let runner_settings_descriptor =
-                    JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
                 let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
-
-                let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
-                    let json = runner_settings.and_then(|json| {
-                        serde_json::to_string(&json)
-                            .map_err(|e| {
-                                anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
-                            })
-                            .ok()
-                    });
-                    tracing::debug!("runner settings schema exists: {:#?}", json);
-                    json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
-                        .unwrap_or(Ok(vec![]))
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
-                        })?
-                } else {
-                    tracing::debug!("runner settings schema empty");
-                    vec![]
-                };
                 let mut worker: WorkerData =
                     if let Some(serde_json::Value::Object(obj)) = worker_params {
                         // override values with workflow metadata
@@ -335,10 +314,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 // random name (temporary name for not static worker)
                 if !worker.use_static {
                     let mut hasher = DefaultHasher::default();
+                    hasher.write_i64(datetime::now_millis());
                     hasher.write_i64(rand::random()); // random
-                    hasher.write(worker.encode_to_vec().as_slice());
-                    tracing::debug!("Worker {}, hash: {}", &worker.name, &hasher.finish());
-                    worker.name = hasher.finish().to_string();
+                    worker.name = format!("{}_{:x}", worker.name, hasher.finish());
+                    tracing::debug!("Worker name with hash: {}", &worker.name);
                 }
                 // TODO unwind and delete not static worker if failed to enqueue job
                 if let Worker {
@@ -346,27 +325,16 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     data: Some(wdata),
                 } = self.find_or_create_worker(&worker).await?
                 {
-                    let serialized_args = job_args.to_string();
-                    tracing::debug!("job args: {:#?}", &serialized_args);
-                    let output = match if let Some(desc) = args_descriptor {
-                        JobworkerpProto::json_to_message(desc, &serialized_args)
-                    } else {
-                        Ok(serialized_args.as_bytes().to_vec())
-                    } {
-                        Ok(args) => {
-                            let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
-                            self.enqueue_job_and_get_output(w, args, job_timeout_sec)
-                                .await
-                        }
-                        Err(e) => {
+                    let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
+                    let output = self
+                        .enqueue_job_and_get_output(w, job_args, job_timeout_sec)
+                        .await
+                        .inspect_err(|e| {
                             tracing::warn!(
-                            "Execute task failed: parsing args with json(or plain) str: {:#?}, error: {:#?}",
-                            &serialized_args,
-                            e
-                        );
-                            Err(e)
-                        }
-                    };
+                                "Execute task failed: enqueue job and get output: {:#?}",
+                                e
+                            )
+                        });
                     // use worker one-time
                     // XXX use_static means static worker in jobworkerp, not in workflow (but use as a temporary worker or not)
                     if !wdata.use_static {
@@ -411,6 +379,67 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         worker
                     ))
                 }
+            } else {
+                Err(anyhow::anyhow!("Not found runner: {}", name))
+            }
+        }
+    }
+    fn setup_worker_and_enqueue_with_json(
+        &self,
+        name: &str,                                 // runner(runner) name
+        runner_settings: Option<serde_json::Value>, // runner_settings data
+        worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
+        job_args: serde_json::Value,              // enqueue job args
+        job_timeout_sec: u32,                     // job timeout in seconds
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        async move {
+            if let Some(Runner {
+                id: Some(_sid),
+                data: Some(sdata),
+            }) = self.find_runner_by_name(name).await?
+            // TODO local cache (2 times request in this function)
+            {
+                let runner_settings_descriptor =
+                    JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
+
+                let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
+                    let json = runner_settings.and_then(|json| {
+                        serde_json::to_string(&json)
+                            .map_err(|e| {
+                                anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
+                            })
+                            .ok()
+                    });
+                    tracing::debug!("runner settings schema exists: {:#?}", json);
+                    json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
+                        .unwrap_or(Ok(vec![]))
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
+                        })?
+                } else {
+                    tracing::debug!("runner settings schema empty");
+                    vec![]
+                };
+                let serialized_args = job_args.to_string();
+                tracing::debug!(
+                    "job desc: {:#?}, args: {:#?}",
+                    &args_descriptor,
+                    &serialized_args
+                );
+                let job_args = if let Some(desc) = args_descriptor.clone() {
+                    JobworkerpProto::json_to_message(desc, &serialized_args)
+                } else {
+                    Ok(serialized_args.as_bytes().to_vec())
+                }?;
+                self.setup_worker_and_enqueue(
+                    name,            // runner(runner) name
+                    runner_settings, // runner_settings data
+                    worker_params,   // worker parameters (if not exists, use default values)
+                    job_args,        // enqueue job args
+                    job_timeout_sec, // job timeout in seconds
+                )
+                .await
             } else {
                 Err(anyhow::anyhow!("Not found runner: {}", name))
             }

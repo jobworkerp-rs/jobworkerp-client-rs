@@ -95,6 +95,13 @@ impl JobworkerpProto {
         .ok_or(anyhow::anyhow!("runner not found: worker: {:?}", &worker))?;
         Self::find_runner_descriptors(client, runner_id).await
     }
+    pub fn json_value_to_message(
+        descriptor: MessageDescriptor,
+        json_value: &serde_json::Value,
+    ) -> Result<Vec<u8>> {
+        let dynamic_message = DynamicMessage::deserialize(descriptor, json_value)?;
+        Ok(dynamic_message.encode_to_vec())
+    }
     pub fn json_to_message(descriptor: MessageDescriptor, json_str: &str) -> Result<Vec<u8>> {
         let mut deserializer = Deserializer::from_str(json_str);
         let dynamic_message = DynamicMessage::deserialize(descriptor, &mut deserializer)?;
