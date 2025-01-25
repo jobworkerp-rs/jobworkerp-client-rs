@@ -222,7 +222,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     .ok_or(anyhow!("job result output is empty: {:?}", res))?
                     .items
                     .first()
-                    .ok_or(anyhow!("job result output first is empty: {:?}", res))?
+                    .unwrap_or(&vec![])
                     .to_owned();
                 Ok(output)
             } else {
