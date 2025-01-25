@@ -10,7 +10,6 @@ use anyhow::{anyhow, Context, Result};
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::datetime;
 use command_utils::util::option::Exists;
-use prost::Message;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
@@ -404,15 +403,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
 
                 let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
-                    let json = runner_settings.and_then(|json| {
-                        serde_json::to_string(&json)
-                            .map_err(|e| {
-                                anyhow::anyhow!("Failed to serialize runner settings: {:#?}", e)
-                            })
-                            .ok()
-                    });
-                    tracing::debug!("runner settings schema exists: {:#?}", json);
-                    json.map(|j| JobworkerpProto::json_to_message(ope_desc, &j))
+                    tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
+                    runner_settings
+                        .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j))
                         .unwrap_or(Ok(vec![]))
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
@@ -421,16 +414,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     tracing::debug!("runner settings schema empty");
                     vec![]
                 };
-                let serialized_args = job_args.to_string();
-                tracing::debug!(
-                    "job desc: {:#?}, args: {:#?}",
-                    &args_descriptor,
-                    &serialized_args
-                );
+                tracing::debug!("job args: {:#?}", &job_args);
                 let job_args = if let Some(desc) = args_descriptor.clone() {
-                    JobworkerpProto::json_to_message(desc, &serialized_args)
+                    JobworkerpProto::json_value_to_message(desc, &job_args)
                 } else {
-                    Ok(serialized_args.as_bytes().to_vec())
+                    Ok(serde_json::to_string(&job_args)?.as_bytes().to_vec())
                 }?;
                 self.setup_worker_and_enqueue(
                     name,            // runner(runner) name
