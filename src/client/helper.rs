@@ -22,6 +22,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         Self: Send + Sync,
     {
         async move {
+            // TODO memory cache
             let mut client = self.jobworkerp_client().runner_client().await;
             // TODO find by name
             let mut stream = client
@@ -237,18 +238,19 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             }
         }
     }
+
     // enqueue job for worker and get result data
     // if worker not exists, create worker (use temporary worker name and delete worker after process if not use_static)
     // argument is json string or plain string (serce_json::Value::String)
     // return value is json string
-    fn setup_worker_and_enqueue(
+    fn setup_worker_and_enqueue_with_raw_output(
         &self,
         name: &str,                               // runner(runner) name
         runner_settings: Vec<u8>,                 // runner_settings data
         worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
         job_args: Vec<u8>,                        // enqueue job args
         job_timeout_sec: u32,                     // job timeout in seconds
-    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+    ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         let name = name.to_owned();
         // let job_args = job_args;
         async move {
@@ -257,7 +259,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 data: Some(sdata),
             }) = self.find_runner_by_name(name.as_str()).await?
             {
-                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
                 let mut worker: WorkerData =
                     if let Some(serde_json::Value::Object(obj)) = worker_params {
                         // override values with workflow metadata
@@ -349,28 +350,28 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         }
                     }
                     // eval error after deleting worker
-                    let output = output?;
-                    let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
-                        match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
-                            Ok(m) => {
-                                let j = ProtobufDescriptor::message_to_json(&m)?;
-                                tracing::debug!(
-                                    "Result schema exists. decode message with proto: {:#?}",
-                                    j
-                                );
-                                serde_json::from_str(j.as_str())
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to parse result schema: {:#?}", e);
-                                serde_json::from_slice(&output)
-                            }
-                        }
-                    } else {
-                        let text = String::from_utf8_lossy(&output);
-                        tracing::debug!("No result schema: {}", text);
-                        Ok(serde_json::Value::String(text.to_string()))
-                    }
-                    .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
+                    // let output = output?;
+                    // let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
+                    //     match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
+                    //         Ok(m) => {
+                    //             let j = ProtobufDescriptor::message_to_json(&m)?;
+                    //             tracing::debug!(
+                    //                 "Result schema exists. decode message with proto: {:#?}",
+                    //                 j
+                    //             );
+                    //             serde_json::from_str(j.as_str())
+                    //         }
+                    //         Err(e) => {
+                    //             tracing::warn!("Failed to parse result schema: {:#?}", e);
+                    //             serde_json::from_slice(&output)
+                    //         }
+                    //     }
+                    // } else {
+                    //     let text = String::from_utf8_lossy(&output);
+                    //     tracing::debug!("No result schema: {}", text);
+                    //     Ok(serde_json::Value::String(text.to_string()))
+                    // }
+                    // .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
                     output
                 } else {
                     Err(anyhow::anyhow!(
@@ -383,6 +384,60 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             }
         }
     }
+    fn setup_worker_and_enqueue(
+        &self,
+        name: &str,                               // runner(runner) name
+        runner_settings: Vec<u8>,                 // runner_settings data
+        worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
+        job_args: Vec<u8>,                        // enqueue job args
+        job_timeout_sec: u32,                     // job timeout in seconds
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        async move {
+            // use memory cache?
+            if let Some(Runner {
+                id: Some(_sid),
+                data: Some(sdata),
+            }) = self.find_runner_by_name(name).await?
+            {
+                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
+                let output = self
+                    .setup_worker_and_enqueue_with_raw_output(
+                        name,
+                        runner_settings,
+                        worker_params,
+                        job_args,
+                        job_timeout_sec,
+                    )
+                    .await?;
+                let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
+                    match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
+                        Ok(m) => {
+                            let j = ProtobufDescriptor::message_to_json(&m)?;
+                            tracing::debug!(
+                                "Result schema exists. decode message with proto: {:#?}",
+                                j
+                            );
+                            serde_json::from_str(j.as_str())
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse result schema: {:#?}", e);
+                            serde_json::from_slice(&output)
+                        }
+                    }
+                } else {
+                    let text = String::from_utf8_lossy(&output);
+                    tracing::debug!("No result schema: {}", text);
+                    Ok(serde_json::Value::String(text.to_string()))
+                }
+                .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
+                output
+            // Ok(output)
+            } else {
+                Err(anyhow::anyhow!("Not found runner: {}", name))
+            }
+        }
+    }
+
     fn setup_worker_and_enqueue_with_json(
         &self,
         name: &str,                                 // runner(runner) name
