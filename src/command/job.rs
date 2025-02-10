@@ -47,6 +47,20 @@ pub enum JobCommand {
         #[clap(short, long)]
         timeout: Option<u64>,
     },
+    EnqueueForStream {
+        #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
+        worker: WorkerIdOrName,
+        #[clap(short, long)]
+        args: String,
+        #[clap(short, long)]
+        unique_key: Option<String>,
+        #[clap(short, long)]
+        run_after_time: Option<i64>,
+        #[clap(short, long)]
+        priority: Option<PriorityArg>,
+        #[clap(short, long)]
+        timeout: Option<u64>,
+    },
     Find {
         #[clap(short, long)]
         id: i64,
@@ -120,6 +134,57 @@ impl JobCommand {
                 } else {
                     println!("{:#?}", response);
                 }
+            }
+            JobCommand::EnqueueForStream {
+                worker,
+                args,
+                unique_key,
+                run_after_time,
+                priority,
+                timeout,
+            } => {
+                let req = worker.to_job_worker();
+                let (_, args_desc, result_desc) =
+                    JobworkerpProto::find_runner_descriptors_by_worker(client, req)
+                        .await
+                        .unwrap();
+                let request = JobRequest {
+                    worker: Some(worker.to_job_worker()),
+                    args: if let Some(args_d) = args_desc {
+                        JobworkerpProto::json_to_message(args_d, args.as_str()).unwrap()
+                    } else {
+                        args.as_bytes().to_vec()
+                    },
+                    uniq_key: unique_key.clone(),
+                    run_after_time: *run_after_time,
+                    priority: priority.clone().map(|p| p.to_grpc() as i32),
+                    timeout: timeout.flat_map(|t| if t > 0 { Some(t) } else { None }),
+                };
+                let response = client
+                    .job_client()
+                    .await
+                    .enqueue_for_stream(request)
+                    .await
+                    .unwrap();
+
+                let meta = response.metadata().clone();
+                let mut response = response.into_inner();
+                // result meta header
+                JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
+                // print streaming response
+                while let Some(item) = response.message().await.unwrap() {
+                    if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item {
+                        JobResultCommand::print_job_result_output(
+                            v.as_slice(),
+                            result_desc.clone(),
+                        );
+                    }
+                }
+                // if let Some(result) = response.result {
+                //     JobResultCommand::print_job_result(&result, result_desc);
+                // } else {
+                //     println!("{:#?}", response);
+                // }
             }
             JobCommand::Find { id } => {
                 let id = JobId { value: *id };

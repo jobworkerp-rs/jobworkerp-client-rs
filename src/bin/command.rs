@@ -30,9 +30,7 @@
 use clap::Parser;
 use jobworkerp_client::{
     client::JobworkerpClient,
-    command::{
-        job::JobArg, job_result::JobResultArg, worker::WorkerArg, runner::RunnerArg,
-    },
+    command::{job::JobArg, job_result::JobResultArg, runner::RunnerArg, worker::WorkerArg},
 };
 use std::time::Duration;
 

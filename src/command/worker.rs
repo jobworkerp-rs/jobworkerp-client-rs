@@ -15,7 +15,7 @@
 use crate::{
     jobworkerp::{
         self,
-        data::{QueueType, ResponseType, WorkerData, WorkerId, RunnerId},
+        data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
         service::{CountCondition, WorkerNameRequest},
     },
     proto::JobworkerpProto,
@@ -57,6 +57,8 @@ pub enum WorkerCommand {
         next_workers: Option<Vec<i64>>,
         #[clap(long, default_value = "false")]
         use_static: bool,
+        #[clap(long, default_value = "false")]
+        output_as_stream: bool,
     },
     Find {
         #[clap(short, long)]
@@ -97,6 +99,8 @@ pub enum WorkerCommand {
         next_workers: Option<Vec<i64>>,
         #[clap(long)]
         use_static: Option<bool>,
+        #[clap(long)]
+        output_as_stream: Option<bool>,
     },
     Delete {
         #[clap(short, long)]
@@ -154,6 +158,7 @@ impl WorkerCommand {
                 store_failure,
                 next_workers,
                 use_static,
+                output_as_stream,
             } => {
                 let runner_settings =
                     match JobworkerpProto::find_worker_runner_settings_descriptors(
@@ -208,6 +213,7 @@ impl WorkerCommand {
                         .collect(),
                     use_static: *use_static,
                     retry_policy: None,
+                    output_as_stream: *output_as_stream, // defined in runner
                 };
                 let response = client.worker_client().await.create(request).await.unwrap();
                 println!("{:#?}", response);
@@ -277,6 +283,7 @@ impl WorkerCommand {
                 store_failure,
                 next_workers,
                 use_static,
+                output_as_stream,
             } => {
                 // find by id and update all fields if some
                 let res = client
@@ -316,6 +323,8 @@ impl WorkerCommand {
                         .map(|n| WorkerId { value: *n })
                         .collect();
                     worker_data.use_static = use_static.unwrap_or(worker_data.use_static);
+                    worker_data.output_as_stream =
+                        output_as_stream.unwrap_or(worker_data.output_as_stream);
                     // worker_data.retry_policy = worker_data.retry_policy; //TODO
                     let response = client
                         .worker_client()
@@ -395,6 +404,7 @@ impl WorkerCommand {
                 println!("\t[store_failure] {}", wdat.store_failure);
                 println!("\t[next_workers] {:?}", wdat.next_workers);
                 println!("\t[use_static] {}", wdat.use_static);
+                println!("\t[output_as_stream] {}", wdat.output_as_stream);
             } else {
                 println!("worker not found");
             }

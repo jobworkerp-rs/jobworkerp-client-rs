@@ -256,7 +256,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         async move {
             if let Some(Runner {
                 id: Some(sid),
-                data: Some(sdata),
+                data: Some(_sdata),
             }) = self.find_runner_by_name(name.as_str()).await?
             {
                 let mut worker: WorkerData =
@@ -293,6 +293,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
                             retry_policy: None, //TODO
+                            output_as_stream: false,
                         }
                     } else {
                         // default values
@@ -309,6 +310,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             next_workers: vec![],
                             use_static: false,
                             retry_policy: None,
+                            output_as_stream: false,
                         }
                     };
                 // random name (temporary name for not static worker)

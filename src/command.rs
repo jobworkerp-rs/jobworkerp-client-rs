@@ -2,7 +2,7 @@
 
 use crate::jobworkerp::{
     data::WorkerId,
-    service::{job_request, listen_request, listen_stream_by_worker_request},
+    service::{job_request, listen_by_worker_request, listen_request},
 };
 use anyhow::Result;
 use serde::Deserialize;
@@ -10,8 +10,8 @@ use std::str::FromStr;
 
 pub mod job;
 pub mod job_result;
-pub mod worker;
 pub mod runner;
+pub mod worker;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
@@ -32,13 +32,13 @@ impl WorkerIdOrName {
             WorkerIdOrName::Name(name) => listen_request::Worker::WorkerName(name.clone()),
         }
     }
-    pub fn to_listen_stream_worker(&self) -> listen_stream_by_worker_request::Worker {
+    pub fn to_listen_stream_worker(&self) -> listen_by_worker_request::Worker {
         match self {
             WorkerIdOrName::Id(id) => {
-                listen_stream_by_worker_request::Worker::WorkerId(WorkerId { value: *id })
+                listen_by_worker_request::Worker::WorkerId(WorkerId { value: *id })
             }
             WorkerIdOrName::Name(name) => {
-                listen_stream_by_worker_request::Worker::WorkerName(name.clone())
+                listen_by_worker_request::Worker::WorkerName(name.clone())
             }
         }
     }
