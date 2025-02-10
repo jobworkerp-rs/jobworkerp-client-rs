@@ -456,13 +456,23 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             // TODO local cache (2 times request in this function)
             {
                 let runner_settings_descriptor =
-                    JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata)?;
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)?;
+                    JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata).map_err(
+                        |e| {
+                            anyhow::anyhow!(
+                                "Failed to parse runner_settings schema descriptor: {:#?}",
+                                e
+                            )
+                        },
+                    )?;
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {:#?}", e)
+                    })?;
 
                 let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
                     tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
                     runner_settings
-                        .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j))
+                        .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true))
                         .unwrap_or(Ok(vec![]))
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
@@ -473,10 +483,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 };
                 tracing::debug!("job args: {:#?}", &job_args);
                 let job_args = if let Some(desc) = args_descriptor.clone() {
-                    JobworkerpProto::json_value_to_message(desc, &job_args)
+                    JobworkerpProto::json_value_to_message(desc, &job_args, true)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e))?
                 } else {
-                    Ok(serde_json::to_string(&job_args)?.as_bytes().to_vec())
-                }?;
+                    serde_json::to_string(&job_args)
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {:#?}", e))?
+                        .as_bytes()
+                        .to_vec()
+                };
                 self.setup_worker_and_enqueue(
                     name,            // runner(runner) name
                     runner_settings, // runner_settings data
