@@ -53,8 +53,6 @@ pub enum WorkerCommand {
         store_success: bool,
         #[clap(long, default_value = "false")]
         store_failure: bool,
-        #[clap(long)]
-        next_workers: Option<Vec<i64>>,
         #[clap(long, default_value = "false")]
         use_static: bool,
         #[clap(long, default_value = "false")]
@@ -95,8 +93,6 @@ pub enum WorkerCommand {
         store_success: Option<bool>,
         #[clap(long)]
         store_failure: Option<bool>,
-        #[clap(long)]
-        next_workers: Option<Vec<i64>>,
         #[clap(long)]
         use_static: Option<bool>,
         #[clap(long)]
@@ -156,7 +152,6 @@ impl WorkerCommand {
                 response_type,
                 store_success,
                 store_failure,
-                next_workers,
                 use_static,
                 output_as_stream,
             } => {
@@ -205,12 +200,6 @@ impl WorkerCommand {
                     },
                     store_success: *store_success,
                     store_failure: *store_failure,
-                    next_workers: next_workers
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|n| WorkerId { value: *n })
-                        .collect(),
                     use_static: *use_static,
                     retry_policy: None,
                     output_as_stream: *output_as_stream, // defined in runner
@@ -281,7 +270,6 @@ impl WorkerCommand {
                 response_type,
                 store_success,
                 store_failure,
-                next_workers,
                 use_static,
                 output_as_stream,
             } => {
@@ -316,12 +304,6 @@ impl WorkerCommand {
                         .unwrap_or(worker_data.response_type);
                     worker_data.store_success = store_success.unwrap_or(worker_data.store_success);
                     worker_data.store_failure = store_failure.unwrap_or(worker_data.store_failure);
-                    worker_data.next_workers = next_workers
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|n| WorkerId { value: *n })
-                        .collect();
                     worker_data.use_static = use_static.unwrap_or(worker_data.use_static);
                     worker_data.output_as_stream =
                         output_as_stream.unwrap_or(worker_data.output_as_stream);
@@ -402,7 +384,6 @@ impl WorkerCommand {
                 println!("\t[response_type] {:?}", wdat.response_type);
                 println!("\t[store_success] {}", wdat.store_success);
                 println!("\t[store_failure] {}", wdat.store_failure);
-                println!("\t[next_workers] {:?}", wdat.next_workers);
                 println!("\t[use_static] {}", wdat.use_static);
                 println!("\t[output_as_stream] {}", wdat.output_as_stream);
             } else {

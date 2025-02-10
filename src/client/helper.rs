@@ -287,7 +287,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("store_success")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(true), //
-                            next_workers: vec![], // XXX use workflow task
                             use_static: obj
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
@@ -307,7 +306,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             response_type: ResponseType::Direct as i32,
                             store_success: false,
                             store_failure: true, //
-                            next_workers: vec![],
                             use_static: false,
                             retry_policy: None,
                             output_as_stream: false,
