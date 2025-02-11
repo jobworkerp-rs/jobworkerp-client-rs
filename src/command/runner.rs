@@ -113,6 +113,14 @@ impl RunnerCommand {
                     .clone()
                     .unwrap_or("(None)".to_string())
             );
+            println!(
+                "\t[output_as_stream] |\n---\n{}",
+                &data
+                    .output_as_stream
+                    .clone()
+                    .map(|v| v.to_string())
+                    .unwrap_or("(None)".to_string())
+            );
         } else {
             println!("[runner]:\n\tdata is empty");
         }
