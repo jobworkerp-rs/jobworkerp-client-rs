@@ -7,13 +7,31 @@ use crate::jobworkerp::service::{
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
+use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::datetime;
 use command_utils::util::option::Exists;
+use command_utils::util::scoped_cache::ScopedCache;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
+    fn find_runner_by_name_with_cache(
+        &self,
+        cache: &ScopedCache<String, Option<Runner>>,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<Runner>>> + Send
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            cache_ok!(
+                cache,
+                format!("runner:{}", name),
+                self.find_runner_by_name(name)
+            )
+        }
+    }
     fn find_runner_by_name(
         &self,
         name: &str,
@@ -451,7 +469,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 id: Some(_sid),
                 data: Some(sdata),
             }) = self.find_runner_by_name(name).await?
-            // TODO local cache (2 times request in this function)
+            // TODO local cache? (2 times request in this function)
             {
                 let runner_settings_descriptor =
                     JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata).map_err(
