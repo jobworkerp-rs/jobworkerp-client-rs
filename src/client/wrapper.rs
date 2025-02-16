@@ -37,4 +37,10 @@ impl JobworkerpClientWrapper {
 
         Ok(JobworkerpClientWrapper { jobworkerp_client })
     }
+    pub fn address(&self) -> &str {
+        self.jobworkerp_client.address.as_str()
+    }
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.jobworkerp_client.request_timeout
+    }
 }
