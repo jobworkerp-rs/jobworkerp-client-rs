@@ -19,12 +19,13 @@ prost = "0.13"
 prost-types = "0.13"
 prost-reflect = { version = "0.14", features = ["serde"] }
 prost-reflect-build = "0.14"
-#rustls = { version = "0.23", default-features = false, features = [
-#    "ring",
-#    "logging",
-#    "std",
-#    "tls12",
-#] }
+# force ring. ref. https://github.com/rustls/rustls/issues/1938
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "logging",
+    "std",
+    "tls12",
+] }
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }

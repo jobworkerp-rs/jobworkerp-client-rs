@@ -21,6 +21,8 @@ impl GrpcConnection {
             Endpoint::try_from(addr.clone())?
         };
         let endpoint = if use_tls {
+            // https://github.com/rustls/rustls/issues/1938
+            let _ = rustls::crypto::ring::default_provider().install_default();
             endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?
         } else {
             endpoint
