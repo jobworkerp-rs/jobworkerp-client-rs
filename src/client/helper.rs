@@ -1,6 +1,7 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, QueueType, ResponseType, ResultStatus, Runner, Worker, WorkerData,
+    JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
+    Worker, WorkerData,
 };
 use crate::jobworkerp::service::{
     CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
@@ -15,6 +16,13 @@ use command_utils::util::scoped_cache::ScopedCache;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
+const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
+    r#type: RetryType::Exponential as i32,
+    interval: 3000,
+    max_interval: 60000,
+    max_retry: 3,
+    basis: 2.0,
+};
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     fn find_runner_by_name_with_cache(
         &self,
@@ -309,7 +317,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            retry_policy: None, //TODO
+                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     } else {
@@ -325,7 +333,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_success: false,
                             store_failure: true, //
                             use_static: false,
-                            retry_policy: None,
+                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     };
