@@ -105,6 +105,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     .into_inner()
                     .id
                     .ok_or(anyhow!("create worker response is empty?"))?;
+                // wait for worker creation pubsub
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 Worker {
                     id: Some(wid),
                     data: Some(worker_data.to_owned()),
@@ -323,7 +325,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            retry_policy: None, //Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     } else {
@@ -339,7 +341,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_success: false,
                             store_failure: true, //
                             use_static: false,
-                            retry_policy: None, //Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     };
