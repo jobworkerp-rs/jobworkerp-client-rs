@@ -1,4 +1,5 @@
 use super::UseJobworkerpClient;
+use crate::command::worker;
 use crate::jobworkerp::data::{
     JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
     Worker, WorkerData,
@@ -93,7 +94,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             let worker = if let Some(w) = worker {
                 w
             } else {
-                tracing::debug!("worker {} not found. create new worker", &worker_data.name,);
+                tracing::debug!(
+                    "worker {} not found. create new worker: {:#?}",
+                    &worker_data.name,
+                    &worker_data
+                );
                 let wid = worker_cli
                     .create(worker_data.clone())
                     .await?
@@ -412,7 +417,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     }
     fn setup_worker_and_enqueue(
         &self,
-        name: &str,                               // runner(runner) name
+        runner_name: &str,                        // runner(runner) name
         runner_settings: Vec<u8>,                 // runner_settings data
         worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
         job_args: Vec<u8>,                        // enqueue job args
@@ -423,12 +428,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             if let Some(Runner {
                 id: Some(_sid),
                 data: Some(sdata),
-            }) = self.find_runner_by_name(name).await?
+            }) = self.find_runner_by_name(runner_name).await?
             {
                 let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
                 let output = self
                     .setup_worker_and_enqueue_with_raw_output(
-                        name,
+                        runner_name,
                         runner_settings,
                         worker_params,
                         job_args,
@@ -459,14 +464,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 output
             // Ok(output)
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", name))
+                Err(anyhow::anyhow!("Not found runner: {}", runner_name))
             }
         }
     }
 
     fn setup_worker_and_enqueue_with_json(
         &self,
-        name: &str,                                 // runner(runner) name
+        runner_name: &str,                          // runner(runner) name
         runner_settings: Option<serde_json::Value>, // runner_settings data
         worker_params: Option<serde_json::Value>, // worker parameters (if not exists, use default values)
         job_args: serde_json::Value,              // enqueue job args
@@ -476,7 +481,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             if let Some(Runner {
                 id: Some(_sid),
                 data: Some(sdata),
-            }) = self.find_runner_by_name(name).await?
+            }) = self.find_runner_by_name(runner_name).await?
             // TODO local cache? (2 times request in this function)
             {
                 let runner_settings_descriptor =
@@ -516,7 +521,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         .to_vec()
                 };
                 self.setup_worker_and_enqueue(
-                    name,            // runner(runner) name
+                    runner_name,     // runner(runner) name
                     runner_settings, // runner_settings data
                     worker_params,   // worker parameters (if not exists, use default values)
                     job_args,        // enqueue job args
@@ -524,7 +529,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 )
                 .await
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", name))
+                Err(anyhow::anyhow!("Not found runner: {}", runner_name))
             }
         }
     }
