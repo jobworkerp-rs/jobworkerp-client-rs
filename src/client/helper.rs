@@ -106,7 +106,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     .id
                     .ok_or(anyhow!("create worker response is empty?"))?;
                 // wait for worker creation pubsub
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
                 Worker {
                     id: Some(wid),
                     data: Some(worker_data.to_owned()),
