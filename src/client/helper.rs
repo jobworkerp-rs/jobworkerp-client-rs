@@ -231,6 +231,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let mut job_cli = self.jobworkerp_client().job_client().await;
+            tracing::debug!("enqueue_job_and_get_output: {:?}", &worker);
             let res = job_cli
                 .enqueue(JobRequest {
                     args,
@@ -322,7 +323,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: None, //Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     } else {
@@ -338,7 +339,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_success: false,
                             store_failure: true, //
                             use_static: false,
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: None, //Some(DEFAULT_RETRY_POLICY.clone()), //TODO
                             output_as_stream: false,
                         }
                     };
