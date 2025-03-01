@@ -1,5 +1,4 @@
 use super::UseJobworkerpClient;
-use crate::command::worker;
 use crate::jobworkerp::data::{
     JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
     Worker, WorkerData,
