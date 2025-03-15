@@ -6,6 +6,7 @@ pub mod jobworkerp {
         tonic::include_proto!("jobworkerp.service");
     }
 }
+pub mod built_in;
 pub mod client;
 pub mod command;
 pub mod grpc;

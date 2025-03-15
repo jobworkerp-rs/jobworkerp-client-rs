@@ -7,14 +7,18 @@
 // -p, --priority <priority> priority of the job (HIGH, MIDDLE, LOW)(for enqueue)
 // -t, --timeout <timeout> timeout of the job (milli-seconds) (for enqueue)
 
-use std::str::FromStr;
+use std::{
+    hash::{DefaultHasher, Hasher},
+    str::FromStr,
+};
 
 use super::WorkerIdOrName;
 use crate::{
+    client::{helper::UseJobworkerpClientHelper, UseJobworkerpClient},
     command::job_result::JobResultCommand,
     jobworkerp::{
         self,
-        data::{JobId, Priority},
+        data::{JobId, Priority, QueueType, ResponseType, Runner, RunnerType, WorkerData},
         service::{job_request, CountCondition, FindListRequest, JobRequest},
     },
     proto::JobworkerpProto,
@@ -22,8 +26,8 @@ use crate::{
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
-use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::option::FlatMap;
+use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 
 #[derive(Parser, Debug)]
 pub struct JobArg {
@@ -60,6 +64,22 @@ pub enum JobCommand {
         priority: Option<PriorityArg>,
         #[clap(short, long)]
         timeout: Option<u64>,
+    },
+    EnqueueWorkflow {
+        #[clap(short, long)]
+        channel: Option<String>,
+        #[clap(long)]
+        context: Option<String>,
+        #[clap(short, long)]
+        input: String,
+        #[clap(short, long)]
+        priority: Option<PriorityArg>,
+        #[clap(short, long)]
+        run_after_time: Option<i64>,
+        #[clap(short, long)]
+        timeout: Option<u64>,
+        #[clap(short, long)]
+        workflow_file: String,
     },
     Find {
         #[clap(short, long)]
@@ -186,6 +206,104 @@ impl JobCommand {
                 //     println!("{:#?}", response);
                 // }
             }
+            JobCommand::EnqueueWorkflow {
+                channel,
+                context,
+                input,
+                priority,
+                run_after_time,
+                timeout,
+                workflow_file,
+            } => {
+                let helper = JobCommandHelper::new(client.clone());
+                let runner = helper
+                    .find_runner_by_name(RunnerType::SimpleWorkflow.as_str_name())
+                    .await
+                    .unwrap();
+                if let Some(Runner {
+                    id: Some(rid),
+                    data: Some(rdata),
+                }) = runner
+                {
+                    let mut hasher = DefaultHasher::default();
+                    hasher.write_i64(datetime::now_millis());
+                    hasher.write_i64(rand::random()); // random
+                                                      // create random worker name
+                    let wname = format!("{}_{:x}", "JobworkerpCilentWorkflow", hasher.finish());
+
+                    let worker_data = WorkerData {
+                        name: wname.clone(),
+                        runner_id: Some(rid),
+                        runner_settings: vec![],
+                        retry_policy: None, // XXX
+                        channel: channel.clone(),
+                        queue_type: QueueType::Normal as i32,
+                        response_type: ResponseType::Direct as i32,
+                        store_success: false,
+                        store_failure: false,
+                        output_as_stream: false,
+                        use_static: false,
+                        ..Default::default()
+                    };
+                    let args = if let Some(args_descriptor) =
+                        JobworkerpProto::parse_job_args_schema_descriptor(&rdata)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to parse job_args schema descriptor: {:#?}",
+                                    e
+                                )
+                            })
+                            .unwrap()
+                    {
+                        let context = context.as_deref().unwrap_or("");
+                        let job_args = serde_json::json![{
+                            "workflow_url": workflow_file.clone(),
+                            "input": input.clone(),
+                            "context": context,
+                        }];
+                        JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
+                            .map_err(|e| {
+                                anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e)
+                            })
+                            .unwrap()
+                    } else {
+                        println!("args_descriptor not found");
+                        return;
+                    };
+                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to parse job_result schema descriptor: {:#?}",
+                                e
+                            )
+                        })
+                        .unwrap();
+
+                    let response = helper
+                        .enqueue_worker_job(
+                            &worker_data,
+                            args,
+                            timeout.map(|t| (t / 1000) as u32).unwrap_or_default(),
+                            run_after_time.clone(),
+                            priority.clone().map(|p| p.to_grpc()),
+                        )
+                        .await
+                        .unwrap();
+                    let _ = helper.delete_worker_by_name(wname.as_str()).await;
+                    if let Some(result) = response.result {
+                        JobResultCommand::print_job_result(&result, result_desc);
+                    } else {
+                        println!("{:#?}", response);
+                    }
+                } else {
+                    println!(
+                        "runner {} not found",
+                        RunnerType::SimpleWorkflow.as_str_name()
+                    );
+                    return;
+                }
+            }
+
             JobCommand::Find { id } => {
                 let id = JobId { value: *id };
                 let response = client.job_client().await.find(id).await.unwrap();
@@ -277,3 +395,18 @@ impl JobCommand {
         }
     }
 }
+struct JobCommandHelper {
+    client: crate::client::JobworkerpClient,
+}
+impl JobCommandHelper {
+    pub fn new(client: crate::client::JobworkerpClient) -> Self {
+        Self { client }
+    }
+}
+
+impl UseJobworkerpClient for JobCommandHelper {
+    fn jobworkerp_client(&self) -> &crate::client::JobworkerpClient {
+        &self.client
+    }
+}
+impl UseJobworkerpClientHelper for JobCommandHelper {}

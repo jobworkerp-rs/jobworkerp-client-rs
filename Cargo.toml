@@ -1,6 +1,6 @@
 [package]
 name = "jobworkerp-client"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["sutr-app"]
 edition = "2021"
 
@@ -14,6 +14,7 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
+futures = "0.3"
 once_cell = "1"
 prost = "0.13"
 prost-types = "0.13"

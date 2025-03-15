@@ -122,13 +122,21 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         mut worker_data: WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
             let runner = self.find_runner_by_name(runner_name).await?;
             worker_data.runner_id = runner.and_then(|r| r.id);
             tracing::debug!("resolved runner_id: {:?}", &worker_data.runner_id);
             let res = self
-                .enqueue_and_get_result_worker_job(&worker_data, args, timeout_sec)
+                .enqueue_and_get_result_worker_job(
+                    &worker_data,
+                    args,
+                    timeout_sec,
+                    run_after_time,
+                    priority,
+                )
                 .await?;
             if res.status() == ResultStatus::Success {
                 Ok(res)
@@ -150,9 +158,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         worker_data: &WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            self.enqueue_worker_job(worker_data, args, timeout_sec)
+            self.enqueue_worker_job(worker_data, args, timeout_sec, run_after_time, priority)
                 .await?
                 .result
                 .ok_or(anyhow!("result not found"))?
@@ -166,10 +176,18 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         worker_data: &WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let res = self
-                .enqueue_and_get_result_worker_job(worker_data, args, timeout_sec)
+                .enqueue_and_get_result_worker_job(
+                    worker_data,
+                    args,
+                    timeout_sec,
+                    run_after_time,
+                    priority,
+                )
                 .await?;
             if res.status() == ResultStatus::Success && res.output.is_some() {
                 // output is Vec<Vec<u8>> but actually 1st Vec<u8> is valid.
@@ -204,6 +222,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
         worker_data: &WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send {
         async move {
             let worker = self.find_or_create_worker(worker_data).await?;
@@ -215,7 +235,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                     worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
                         worker.id.unwrap(),
                     )),
-                    priority: Some(Priority::High as i32), // higher priority for user slack response
+                    priority: priority.map(|p| p as i32), // higher priority for user slack response
+                    run_after_time,
                     ..Default::default()
                 })
                 .await
@@ -532,6 +553,35 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 .await
             } else {
                 Err(anyhow::anyhow!("Not found runner: {}", runner_name))
+            }
+        }
+    }
+    fn delete_worker_by_name(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            // TODO create delete_by_name rpc?
+            let mut worker_cli = self.jobworkerp_client().worker_client().await;
+            let w = worker_cli
+                .find_by_name(WorkerNameRequest {
+                    name: name.to_string(),
+                })
+                .await
+                .map(|r| r.into_inner())
+                .context("find_worker_by_name")?
+                .data;
+            if let Some(Worker { id: Some(wid), .. }) = w {
+                worker_cli
+                    .delete(wid)
+                    .await
+                    .map(|r| r.into_inner().is_success)
+                    .context("delete_worker_by_id")
+            } else {
+                Err(anyhow::anyhow!("Not found worker: {}", name))
             }
         }
     }
