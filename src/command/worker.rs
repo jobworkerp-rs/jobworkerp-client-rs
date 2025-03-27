@@ -38,6 +38,8 @@ pub enum WorkerCommand {
         #[clap(short, long)]
         name: String,
         #[clap(short, long)]
+        description: String,
+        #[clap(short, long)]
         runner_id: i64,
         #[clap(short, long)]
         settings: String,
@@ -77,6 +79,8 @@ pub enum WorkerCommand {
         id: i64,
         #[clap(short, long)]
         name: Option<String>,
+        #[clap(short, long)]
+        description: Option<String>,
         #[clap(short, long)]
         runner_id: Option<i64>,
         #[clap(short, long)]
@@ -144,6 +148,7 @@ impl WorkerCommand {
         match self {
             WorkerCommand::Create {
                 name,
+                description,
                 runner_id,
                 settings,
                 periodic,
@@ -184,6 +189,7 @@ impl WorkerCommand {
                     };
                 let request = WorkerData {
                     name: name.clone(),
+                    description: description.clone(),
                     runner_id: Some(RunnerId { value: *runner_id }),
                     runner_settings,
                     periodic_interval: *periodic,
@@ -262,6 +268,7 @@ impl WorkerCommand {
             WorkerCommand::Update {
                 id,
                 name,
+                description,
                 runner_id,
                 settings,
                 periodic,
@@ -283,6 +290,8 @@ impl WorkerCommand {
                 let worker_opt = res.into_inner().data;
                 if let Some(mut worker_data) = worker_opt.flat_map(|w| w.data) {
                     worker_data.name = name.clone().unwrap_or(worker_data.name);
+                    worker_data.description =
+                        description.clone().unwrap_or(worker_data.description);
                     worker_data.runner_id = runner_id
                         .map(|s| RunnerId { value: s })
                         .or(worker_data.runner_id);
@@ -355,6 +364,7 @@ impl WorkerCommand {
                 .flatten();
                 println!("[worker]:\n\t[id] {}", &wid.value);
                 println!("\t[name] {}", &wdat.name);
+                println!("\t[description] {}", &wdat.description);
                 println!(
                     "\t[runner_id] {}",
                     wdat.runner_id.map(|s| s.value).unwrap_or_default()

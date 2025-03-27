@@ -100,6 +100,7 @@ impl RunnerCommand {
         {
             println!("[runner]:\n\t[id] {}", &_id.value);
             println!("\t[name] {}", &data.name);
+            println!("\t[description] {}", &data.description);
             println!("\t[runner_type] {}", &data.runner_type().as_str_name());
             println!(
                 "\t[runner_settings_proto] |\n---\n{}",

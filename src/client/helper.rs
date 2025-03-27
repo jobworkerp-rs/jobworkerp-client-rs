@@ -321,6 +321,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("name")
                                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                                 .unwrap_or_else(|| name.to_string().clone()),
+                            description: obj
+                                .get("description")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                .unwrap_or_else(|| "".to_string()),
                             runner_id: Some(sid),
                             runner_settings,
                             periodic_interval: 0,
@@ -352,6 +356,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                         // default values
                         WorkerData {
                             name: name.to_string().clone(),
+                            description: "".to_string(),
                             runner_id: Some(sid),
                             runner_settings,
                             periodic_interval: 0,
