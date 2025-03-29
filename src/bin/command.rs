@@ -30,7 +30,9 @@
 use clap::Parser;
 use jobworkerp_client::{
     client::JobworkerpClient,
-    command::{job::JobArg, job_result::JobResultArg, runner::RunnerArg, worker::WorkerArg},
+    command::{
+        job::JobArg, job_result::JobResultArg, runner::RunnerArg, tool::ToolArg, worker::WorkerArg,
+    },
 };
 use std::time::Duration;
 
@@ -49,6 +51,7 @@ struct Opts {
 pub(crate) enum SubCommand {
     Runner(RunnerArg),
     Worker(WorkerArg),
+    Tool(ToolArg),
     Job(JobArg),
     JobResult(JobResultArg),
 }
@@ -64,6 +67,9 @@ async fn main() {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Worker(cmd) => {
+            cmd.cmd.execute(&client).await;
+        }
+        SubCommand::Tool(cmd) => {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Job(cmd) => {

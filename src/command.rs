@@ -11,6 +11,7 @@ use std::str::FromStr;
 pub mod job;
 pub mod job_result;
 pub mod runner;
+pub mod tool;
 pub mod worker;
 
 #[derive(Debug, Deserialize, Clone)]
