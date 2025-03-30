@@ -29,7 +29,7 @@ pub trait PluginRunner: Send + Sync {
         match serde_json::to_string(&schema) {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!("error in input_json_schema: {:?}", e);
+                tracing::error!("error in settings_schema: {:?}", e);
                 "".to_string()
             }
         }
@@ -39,7 +39,7 @@ pub trait PluginRunner: Send + Sync {
         match serde_json::to_string(&schema) {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!("error in input_json_schema: {:?}", e);
+                tracing::error!("error in arguments_schema: {:?}", e);
                 "".to_string()
             }
         }
