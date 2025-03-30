@@ -18,9 +18,9 @@ use tokio_stream::StreamExt;
 
 const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     r#type: RetryType::Exponential as i32,
-    interval: 3000,
+    interval: 800,
     max_interval: 60000,
-    max_retry: 3,
+    max_retry: 1,
     basis: 2.0,
 };
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
