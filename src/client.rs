@@ -3,6 +3,7 @@ pub mod wrapper;
 
 use crate::grpc::GrpcConnection;
 use crate::jobworkerp::service::{
+    function_service_client::FunctionServiceClient,
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
     job_status_service_client::JobStatusServiceClient, runner_service_client::RunnerServiceClient,
@@ -21,7 +22,7 @@ pub struct JobworkerpClient {
 impl JobworkerpClient {
     pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
         let use_tls = addr.starts_with("https://");
-        let con = GrpcConnection::new(addr.clone(), request_timeout.clone(), use_tls).await?;
+        let con = GrpcConnection::new(addr.clone(), request_timeout, use_tls).await?;
         Ok(Self {
             address: addr,
             request_timeout,
@@ -39,6 +40,10 @@ impl JobworkerpClient {
     pub async fn worker_client(&self) -> WorkerServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
         WorkerServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+    }
+    pub async fn function_client(&self) -> FunctionServiceClient<tonic::transport::Channel> {
+        let cell = self.connection.read_channel().await;
+        FunctionServiceClient::new(cell.clone())
     }
     pub async fn job_client(&self) -> JobServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;

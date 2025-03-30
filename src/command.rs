@@ -8,6 +8,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::str::FromStr;
 
+pub mod function;
 pub mod job;
 pub mod job_result;
 pub mod runner;

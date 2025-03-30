@@ -1,6 +1,6 @@
 [package]
 name = "jobworkerp-client"
-version = "0.10.0"
+version = "0.11.0"
 authors = ["sutr-app"]
 edition = "2021"
 
@@ -28,8 +28,10 @@ rustls = { version = "0.23", default-features = false, features = [
     "tls12",
 ] }
 rand = "0.9"
+schemars = { version = "0.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+thiserror = { version = "2" }
 tonic = { version = "0.13", features = ["tls-ring", "tls-webpki-roots"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"

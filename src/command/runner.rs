@@ -115,12 +115,10 @@ impl RunnerCommand {
                     .unwrap_or("(None)".to_string())
             );
             println!(
-                "\t[output_as_stream] |\n---\n{}",
-                &data
-                    .output_as_stream
-                    .clone()
-                    .map(|v| v.to_string())
-                    .unwrap_or("(None)".to_string())
+                "\t[output_type] |\n---\n{}",
+                crate::jobworkerp::data::StreamingOutputType::try_from(data.output_type)
+                    .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
+                    .as_str_name()
             );
         } else {
             println!("[runner]:\n\tdata is empty");

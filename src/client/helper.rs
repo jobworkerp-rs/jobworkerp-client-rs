@@ -1,10 +1,10 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
-    Worker, WorkerData,
+    FunctionSpecs, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy,
+    RetryType, Runner, Worker, WorkerData,
 };
 use crate::jobworkerp::service::{
-    CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
+    CreateJobResponse, FindFunctionRequest, FindListRequest, JobRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
@@ -16,14 +16,42 @@ use command_utils::util::scoped_cache::ScopedCache;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
-const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
+pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     r#type: RetryType::Exponential as i32,
-    interval: 3000,
+    interval: 800,
     max_interval: 60000,
-    max_retry: 3,
+    max_retry: 1,
     basis: 2.0,
 };
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
+    fn find_function_list(
+        &self,
+        exclude_runner: bool,
+        exclude_worker: bool,
+    ) -> impl std::future::Future<Output = Result<Vec<FunctionSpecs>>> + Send {
+        async move {
+            let response = self
+                .jobworkerp_client()
+                .function_client()
+                .await
+                .find_list(tonic::Request::new(FindFunctionRequest {
+                    exclude_runner,
+                    exclude_worker,
+                }))
+                .await?;
+            let mut functions = Vec::new();
+            let mut stream = response.into_inner();
+            while let Some(t) = stream.next().await {
+                match t {
+                    Ok(t) => {
+                        functions.push(t);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(functions)
+        }
+    }
     fn find_runner_by_name_with_cache(
         &self,
         cache: &ScopedCache<String, Option<Runner>>,
@@ -349,8 +377,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
-                            output_as_stream: false,
+                            retry_policy: Some(DEFAULT_RETRY_POLICY), //TODO
+                            broadcast_results: true,
                         }
                     } else {
                         // default values
@@ -366,8 +394,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_success: false,
                             store_failure: true, //
                             use_static: false,
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
-                            output_as_stream: false,
+                            retry_policy: Some(DEFAULT_RETRY_POLICY), //TODO
+                            broadcast_results: true,
                         }
                     };
                 // random name (temporary name for not static worker)
@@ -557,7 +585,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 )
                 .await
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", runner_name))
+                Err(crate::error::ClientError::NotFound(format!(
+                    "Not found runner: {}",
+                    runner_name
+                ))
+                .into())
             }
         }
     }
