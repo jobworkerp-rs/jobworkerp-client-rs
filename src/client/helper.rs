@@ -1,10 +1,10 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
-    Worker, WorkerData,
+    FunctionSpecs, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy,
+    RetryType, Runner, Worker, WorkerData,
 };
 use crate::jobworkerp::service::{
-    CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
+    CreateJobResponse, FindFunctionRequest, FindListRequest, JobRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
@@ -24,6 +24,34 @@ const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     basis: 2.0,
 };
 pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
+    fn find_function_list(
+        &self,
+        exclude_runner: bool,
+        exclude_worker: bool,
+    ) -> impl std::future::Future<Output = Result<Vec<FunctionSpecs>>> + Send {
+        async move {
+            let response = self
+                .jobworkerp_client()
+                .function_client()
+                .await
+                .find_list(tonic::Request::new(FindFunctionRequest {
+                    exclude_runner,
+                    exclude_worker,
+                }))
+                .await?;
+            let mut functions = Vec::new();
+            let mut stream = response.into_inner();
+            while let Some(t) = stream.next().await {
+                match t {
+                    Ok(t) => {
+                        functions.push(t);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(functions)
+        }
+    }
     fn find_runner_by_name_with_cache(
         &self,
         cache: &ScopedCache<String, Option<Runner>>,

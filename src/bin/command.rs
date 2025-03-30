@@ -1,4 +1,4 @@
-// command line tool to interact with jobworkerp grpc api (CRUD)
+// command line function to interact with jobworkerp grpc api (CRUD)
 // arguments:
 //
 // command: jobworkerp-cli
@@ -31,7 +31,8 @@ use clap::Parser;
 use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
-        job::JobArg, job_result::JobResultArg, runner::RunnerArg, tool::ToolArg, worker::WorkerArg,
+        function::FunctionArg, job::JobArg, job_result::JobResultArg, runner::RunnerArg,
+        worker::WorkerArg,
     },
 };
 use std::time::Duration;
@@ -51,7 +52,7 @@ struct Opts {
 pub(crate) enum SubCommand {
     Runner(RunnerArg),
     Worker(WorkerArg),
-    Tool(ToolArg),
+    Function(FunctionArg),
     Job(JobArg),
     JobResult(JobResultArg),
 }
@@ -69,7 +70,7 @@ async fn main() {
         SubCommand::Worker(cmd) => {
             cmd.cmd.execute(&client).await;
         }
-        SubCommand::Tool(cmd) => {
+        SubCommand::Function(cmd) => {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Job(cmd) => {
