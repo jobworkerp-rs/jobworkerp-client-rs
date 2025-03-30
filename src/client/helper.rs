@@ -585,7 +585,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 )
                 .await
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", runner_name))
+                Err(
+                    crate::error::ClientError::NotFound(format!("Not found runner: {}", runner_name))
+                        .into(),
+                )
             }
         }
     }

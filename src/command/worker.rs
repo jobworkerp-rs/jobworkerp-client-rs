@@ -15,7 +15,7 @@
 use crate::{
     jobworkerp::{
         self,
-        data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
+        data::{QueueType, ResponseType, RetryPolicy, RetryType, RunnerId, WorkerData, WorkerId},
         service::{CountCondition, WorkerNameRequest},
     },
     proto::JobworkerpProto,
@@ -25,6 +25,14 @@ use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::{option::FlatMap, result::ToOption};
 use std::process::exit;
+
+const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
+    r#type: RetryType::Exponential as i32,
+    interval: 1000,
+    max_interval: 60000,
+    max_retry: 3,
+    basis: 2.0,
+};
 
 #[derive(Parser, Debug)]
 pub struct WorkerArg {
@@ -207,7 +215,7 @@ impl WorkerCommand {
                     store_success: *store_success,
                     store_failure: *store_failure,
                     use_static: *use_static,
-                    retry_policy: None,
+                    retry_policy: Some(DEFAULT_RETRY_POLICY),
                     broadcast_results: *broadcast_results,
                 };
                 let response = client.worker_client().await.create(request).await.unwrap();
