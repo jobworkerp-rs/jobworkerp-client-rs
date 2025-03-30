@@ -377,7 +377,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .get("use_static")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: Some(DEFAULT_RETRY_POLICY), //TODO
                             broadcast_results: true,
                         }
                     } else {
@@ -394,7 +394,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_success: false,
                             store_failure: true, //
                             use_static: false,
-                            retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
+                            retry_policy: Some(DEFAULT_RETRY_POLICY), //TODO
                             broadcast_results: true,
                         }
                     };
@@ -585,10 +585,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 )
                 .await
             } else {
-                Err(
-                    crate::error::ClientError::NotFound(format!("Not found runner: {}", runner_name))
-                        .into(),
-                )
+                Err(crate::error::ClientError::NotFound(format!(
+                    "Not found runner: {}",
+                    runner_name
+                ))
+                .into())
             }
         }
     }

@@ -22,7 +22,7 @@ pub struct JobworkerpClient {
 impl JobworkerpClient {
     pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
         let use_tls = addr.starts_with("https://");
-        let con = GrpcConnection::new(addr.clone(), request_timeout.clone(), use_tls).await?;
+        let con = GrpcConnection::new(addr.clone(), request_timeout, use_tls).await?;
         Ok(Self {
             address: addr,
             request_timeout,

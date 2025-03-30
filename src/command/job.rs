@@ -284,7 +284,7 @@ impl JobCommand {
                             &worker_data,
                             args,
                             timeout.map(|t| (t / 1000) as u32).unwrap_or_default(),
-                            run_after_time.clone(),
+                            *run_after_time,
                             priority.clone().map(|p| p.to_grpc()),
                         )
                         .await
