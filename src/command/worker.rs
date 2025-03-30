@@ -13,9 +13,10 @@
 // --use-static <bool> use static worker (for create, update) (default: false)
 
 use crate::{
+    client::helper::DEFAULT_RETRY_POLICY,
     jobworkerp::{
         self,
-        data::{QueueType, ResponseType, RetryPolicy, RetryType, RunnerId, WorkerData, WorkerId},
+        data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
         service::{CountCondition, WorkerNameRequest},
     },
     proto::JobworkerpProto,
@@ -25,14 +26,6 @@ use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::{option::FlatMap, result::ToOption};
 use std::process::exit;
-
-const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
-    r#type: RetryType::Exponential as i32,
-    interval: 1000,
-    max_interval: 60000,
-    max_retry: 3,
-    basis: 2.0,
-};
 
 #[derive(Parser, Debug)]
 pub struct WorkerArg {

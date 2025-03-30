@@ -16,7 +16,7 @@ use command_utils::util::scoped_cache::ScopedCache;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
 
-const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
+pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     r#type: RetryType::Exponential as i32,
     interval: 800,
     max_interval: 60000,
