@@ -58,7 +58,7 @@ pub enum WorkerCommand {
         #[clap(long, default_value = "false")]
         use_static: bool,
         #[clap(long, default_value = "false")]
-        output_as_stream: bool,
+        broadcast_results: bool,
     },
     Find {
         #[clap(short, long)]
@@ -100,7 +100,7 @@ pub enum WorkerCommand {
         #[clap(long)]
         use_static: Option<bool>,
         #[clap(long)]
-        output_as_stream: Option<bool>,
+        broadcast_results: Option<bool>,
     },
     Delete {
         #[clap(short, long)]
@@ -158,7 +158,7 @@ impl WorkerCommand {
                 store_success,
                 store_failure,
                 use_static,
-                output_as_stream,
+                broadcast_results,
             } => {
                 let runner_settings =
                     match JobworkerpProto::find_worker_runner_settings_descriptors(
@@ -208,7 +208,7 @@ impl WorkerCommand {
                     store_failure: *store_failure,
                     use_static: *use_static,
                     retry_policy: None,
-                    output_as_stream: *output_as_stream, // defined in runner
+                    broadcast_results: *broadcast_results,
                 };
                 let response = client.worker_client().await.create(request).await.unwrap();
                 println!("{:#?}", response);
@@ -278,7 +278,7 @@ impl WorkerCommand {
                 store_success,
                 store_failure,
                 use_static,
-                output_as_stream,
+                broadcast_results,
             } => {
                 // find by id and update all fields if some
                 let res = client
@@ -314,8 +314,8 @@ impl WorkerCommand {
                     worker_data.store_success = store_success.unwrap_or(worker_data.store_success);
                     worker_data.store_failure = store_failure.unwrap_or(worker_data.store_failure);
                     worker_data.use_static = use_static.unwrap_or(worker_data.use_static);
-                    worker_data.output_as_stream =
-                        output_as_stream.unwrap_or(worker_data.output_as_stream);
+                    worker_data.broadcast_results =
+                        broadcast_results.unwrap_or(worker_data.broadcast_results);
                     // worker_data.retry_policy = worker_data.retry_policy; //TODO
                     let response = client
                         .worker_client()
@@ -395,7 +395,7 @@ impl WorkerCommand {
                 println!("\t[store_success] {}", wdat.store_success);
                 println!("\t[store_failure] {}", wdat.store_failure);
                 println!("\t[use_static] {}", wdat.use_static);
-                println!("\t[output_as_stream] {}", wdat.output_as_stream);
+                println!("\t[broadcast_results] {}", wdat.broadcast_results);
             } else {
                 println!("worker not found");
             }

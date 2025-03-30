@@ -241,7 +241,7 @@ impl JobCommand {
                         response_type: ResponseType::Direct as i32,
                         store_success: false,
                         store_failure: false,
-                        output_as_stream: false,
+                        broadcast_results: true,
                         use_static: false,
                         ..Default::default()
                     };

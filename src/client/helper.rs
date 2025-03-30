@@ -350,7 +350,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
                             retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
-                            output_as_stream: false,
+                            broadcast_results: true,
                         }
                     } else {
                         // default values
@@ -367,7 +367,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                             store_failure: true, //
                             use_static: false,
                             retry_policy: Some(DEFAULT_RETRY_POLICY.clone()), //TODO
-                            output_as_stream: false,
+                            broadcast_results: true,
                         }
                     };
                 // random name (temporary name for not static worker)
