@@ -48,3 +48,33 @@ pub trait PluginRunner: Send + Sync {
         None
     }
 }
+
+/// Macro to convert a Rust type to a JSON schema string
+#[macro_export]
+macro_rules! schema_to_json_string {
+    ($type:ty, $method_name:expr) => {{
+        let schema = schemars::schema_for!($type);
+        match serde_json::to_string(&schema) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("error in {}: {:?}", $method_name, e);
+                "".to_string()
+            }
+        }
+    }};
+}
+
+/// Macro to convert a Rust type to an Option<String> JSON schema
+#[macro_export]
+macro_rules! schema_to_json_string_option {
+    ($type:ty, $method_name:expr) => {{
+        let schema = schemars::schema_for!($type);
+        match serde_json::to_string(&schema) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::error!("error in {}: {:?}", $method_name, e);
+                None
+            }
+        }
+    }};
+}
