@@ -54,18 +54,12 @@ impl FunctionCommand {
         println!("[function]:");
 
         // Print function ID (either runner or worker)
-        match &function.function_id {
-            Some(crate::jobworkerp::data::function_specs::FunctionId::RunnerId(runner_id)) => {
-                println!("\t[runner_id] {}", runner_id.value);
-            }
-            Some(crate::jobworkerp::data::function_specs::FunctionId::WorkerId(worker_id)) => {
-                println!("\t[worker_id] {}", worker_id.value);
-            }
-            None => {
-                println!("\t[id] None");
-            }
-        }
-
+        function.runner_id.as_ref().map(|runner_id| {
+            println!("\t[runner_id] {}", runner_id.value);
+        });
+        function.worker_id.as_ref().map(|worker_id| {
+            println!("\t[worker_id] {}", worker_id.value);
+        });
         println!("\t[name] {}", &function.name);
         println!("\t[description] {}", &function.description);
 
