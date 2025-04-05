@@ -24,7 +24,6 @@ use crate::{
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
-use command_utils::util::{option::FlatMap, result::ToOption};
 use std::process::exit;
 
 #[derive(Parser, Debug)]
@@ -289,7 +288,7 @@ impl WorkerCommand {
                     .await
                     .unwrap();
                 let worker_opt = res.into_inner().data;
-                if let Some(mut worker_data) = worker_opt.flat_map(|w| w.data) {
+                if let Some(mut worker_data) = worker_opt.and_then(|w| w.data) {
                     worker_data.name = name.clone().unwrap_or(worker_data.name);
                     worker_data.description =
                         description.clone().unwrap_or(worker_data.description);
@@ -361,7 +360,7 @@ impl WorkerCommand {
                     wdat.runner_id.unwrap(),
                 )
                 .await
-                .to_option()
+                .ok()
                 .flatten();
                 println!("[worker]:\n\t[id] {}", &wid.value);
                 println!("\t[name] {}", &wdat.name);
