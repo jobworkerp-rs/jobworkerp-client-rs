@@ -26,7 +26,6 @@ use crate::{
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
-use command_utils::util::option::FlatMap;
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 
 #[derive(Parser, Debug)]
@@ -140,7 +139,7 @@ impl JobCommand {
                     uniq_key: unique_key.clone(),
                     run_after_time: *run_after_time,
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
-                    timeout: timeout.flat_map(|t| if t > 0 { Some(t) } else { None }),
+                    timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
                 };
                 let response = client
                     .job_client()
@@ -178,7 +177,7 @@ impl JobCommand {
                     uniq_key: unique_key.clone(),
                     run_after_time: *run_after_time,
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
-                    timeout: timeout.flat_map(|t| if t > 0 { Some(t) } else { None }),
+                    timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
                 };
                 let response = client
                     .job_client()
@@ -256,11 +255,12 @@ impl JobCommand {
                             .unwrap()
                     {
                         let context = context.as_deref().unwrap_or("");
-                        let job_args = serde_json::json![{
-                            "workflow_url": workflow_file.clone(),
-                            "input": input.clone(),
-                            "context": context,
-                        }];
+                        let job_args = serde_json::json!({
+                            "url": serde_json::Value::String(workflow_file.clone()),
+                            "input": serde_json::from_str::<serde_json::Value>(input.as_str())
+                                .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
+                            "workflow_context": context,
+                        });
                         JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
                             .map_err(|e| {
                                 anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e)
@@ -278,7 +278,6 @@ impl JobCommand {
                             )
                         })
                         .unwrap();
-
                     let response = helper
                         .enqueue_worker_job(
                             &worker_data,

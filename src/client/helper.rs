@@ -11,7 +11,6 @@ use anyhow::{anyhow, Context, Result};
 use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::datetime;
-use command_utils::util::option::Exists;
 use command_utils::util::scoped_cache::ScopedCache;
 use std::hash::{DefaultHasher, Hasher};
 use tokio_stream::StreamExt;
@@ -89,7 +88,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(item) => {
-                        if item.data.as_ref().exists(|d| d.name == name) {
+                        if item.data.as_ref().is_some_and(|d| d.name == name) {
                             return Ok(Some(item));
                         }
                     }
