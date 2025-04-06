@@ -216,7 +216,7 @@ impl JobCommand {
             } => {
                 let helper = JobCommandHelper::new(client.clone());
                 let runner = helper
-                    .find_runner_by_name(RunnerType::SimpleWorkflow.as_str_name())
+                    .find_runner_by_name(RunnerType::InlineWorkflow.as_str_name())
                     .await
                     .unwrap();
                 if let Some(Runner {
@@ -297,7 +297,7 @@ impl JobCommand {
                 } else {
                     println!(
                         "runner {} not found",
-                        RunnerType::SimpleWorkflow.as_str_name()
+                        RunnerType::InlineWorkflow.as_str_name()
                     );
                     return;
                 }

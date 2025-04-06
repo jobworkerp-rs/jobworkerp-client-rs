@@ -120,11 +120,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             let worker = if let Some(w) = worker {
                 w
             } else {
-                tracing::debug!(
-                    "worker {} not found. create new worker: {:#?}",
-                    &worker_data.name,
-                    &worker_data
-                );
+                tracing::debug!("worker {} not found. create new worker", &worker_data.name,);
                 let wid = worker_cli
                     .create(worker_data.clone())
                     .await?
