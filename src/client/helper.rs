@@ -1,10 +1,11 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
     FunctionSpecs, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy,
-    RetryType, Runner, Worker, WorkerData,
+    RetryType, Runner, Worker, WorkerData, WorkerId,
 };
 use crate::jobworkerp::service::{
-    CreateJobResponse, FindFunctionRequest, FindListRequest, JobRequest, WorkerNameRequest,
+    CreateJobResponse, FindFunctionRequest, FindListRequest, JobRequest, OptionalRunnerResponse,
+    WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
@@ -96,6 +97,36 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 }
             }
             Ok(None)
+        }
+    }
+    // delegate
+    fn find_worker_by_name(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<(WorkerId, WorkerData)>>> + Send
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            let mut worker_cli = self.jobworkerp_client().worker_client().await;
+            let worker = worker_cli
+                .find_by_name(WorkerNameRequest {
+                    name: name.to_string(),
+                })
+                .await?
+                .into_inner()
+                .data;
+            Ok(worker.and_then(|w| {
+                if let Worker {
+                    id: Some(wid),
+                    data: Some(wdata),
+                } = w
+                {
+                    Some((wid, wdata))
+                } else {
+                    None
+                }
+            }))
         }
     }
     fn find_or_create_worker(
@@ -588,6 +619,88 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
             }
         }
     }
+
+    fn enqueue_with_json(
+        &self,
+        worker_data: &WorkerData,
+        job_args: serde_json::Value, // enqueue job args
+        job_timeout_sec: u32,        // job timeout in seconds
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        async move {
+            let runner_id = worker_data
+                .runner_id
+                .ok_or(anyhow!("runner_id not found"))?;
+            if let OptionalRunnerResponse {
+                data:
+                    Some(Runner {
+                        id: Some(_sid),
+                        data: Some(sdata),
+                    }),
+            } = self
+                .jobworkerp_client()
+                .runner_client()
+                .await
+                .find(runner_id)
+                .await?
+                .into_inner()
+            // TODO local cache
+            {
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {:#?}", e)
+                    })?;
+
+                tracing::debug!("job args: {:#?}", &job_args);
+                let job_args = if let Some(desc) = args_descriptor.clone() {
+                    JobworkerpProto::json_value_to_message(desc, &job_args, true)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e))?
+                } else {
+                    serde_json::to_string(&job_args)
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {:#?}", e))?
+                        .as_bytes()
+                        .to_vec()
+                };
+                let output = self
+                    .enqueue_and_get_output_worker_job(
+                        worker_data,
+                        job_args,
+                        job_timeout_sec,
+                        None,
+                        None,
+                    )
+                    .await?;
+                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
+                if let Some(desc) = result_descriptor {
+                    match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
+                        Ok(m) => {
+                            let j = ProtobufDescriptor::message_to_json(&m)?;
+                            tracing::debug!(
+                                "Result schema exists. decode message with proto: {:#?}",
+                                j
+                            );
+                            serde_json::from_str(j.as_str())
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse result schema: {:#?}", e);
+                            serde_json::from_slice(&output)
+                        }
+                    }
+                } else {
+                    let text = String::from_utf8_lossy(&output);
+                    tracing::debug!("No result schema: {}", text);
+                    Ok(serde_json::Value::String(text.to_string()))
+                }
+                .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e))
+            } else {
+                Err(crate::error::ClientError::NotFound(format!(
+                    "Not found runner of worker: {}",
+                    &worker_data.name
+                ))
+                .into())
+            }
+        }
+    }
+
     fn delete_worker_by_name(
         &self,
         name: &str,
