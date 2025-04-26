@@ -1,6 +1,9 @@
 use crate::{
     client::JobworkerpClient,
-    jobworkerp::{data::FunctionSpecs, service::FindFunctionRequest},
+    jobworkerp::{
+        data::{function_specs, FunctionSchema, FunctionSpecs, McpToolList},
+        service::FindFunctionRequest,
+    },
 };
 use clap::Parser;
 
@@ -54,31 +57,48 @@ impl FunctionCommand {
         println!("[function]:");
 
         // Print function ID (either runner or worker)
-        function.runner_id.as_ref().map(|runner_id| {
+        function.runner_id.as_ref().inspect(|runner_id| {
             println!("\t[runner_id] {}", runner_id.value);
         });
-        function.worker_id.as_ref().map(|worker_id| {
+        function.worker_id.as_ref().inspect(|worker_id| {
             println!("\t[worker_id] {}", worker_id.value);
         });
         println!("\t[name] {}", &function.name);
         println!("\t[description] {}", &function.description);
 
         // Print input schema
-        if let Some(input_schema) = &function.input_schema {
-            println!("\t[input_schema]:");
-            if let Some(settings) = &input_schema.settings {
-                println!("\t\t[settings] |\n---\n{}", settings);
-            } else {
-                println!("\t\t[settings] (None)");
+        match &function.schema {
+            Some(function_specs::Schema::SingleSchema(FunctionSchema {
+                settings,
+                arguments,
+                result_output_schema,
+            })) => {
+                println!("\t[input_schema]:");
+                if let Some(settings) = &settings {
+                    println!("\t\t[settings] |\n---\n{}", settings);
+                } else {
+                    println!("\t\t[settings] (None)");
+                }
+                println!("\t\t[arguments] |\n---\n{}", &arguments);
+                // Print output schema if available
+                if let Some(result_output_schema) = &result_output_schema {
+                    println!("\t[result_output_schema] |\n---\n{}", result_output_schema);
+                } else {
+                    println!("\t[result_output_schema] (None)");
+                }
             }
-            println!("\t\t[arguments] |\n---\n{}", &input_schema.arguments);
-        }
-
-        // Print output schema if available
-        if let Some(result_output_schema) = &function.result_output_schema {
-            println!("\t[result_output_schema] |\n---\n{}", result_output_schema);
-        } else {
-            println!("\t[result_output_schema] (None)");
+            Some(function_specs::Schema::McpTools(McpToolList { list })) => {
+                println!("\t[input_schema]:");
+                for tool in list {
+                    println!("\t\t[tool] {}", tool.name);
+                    println!("\t\t[description] {:?}", tool.description);
+                    println!("\t\t[input schema] {:?}", tool.input_schema);
+                    println!("\t\t[annotations] {:?}", tool.annotations);
+                }
+            }
+            None => {
+                println!("\t[input_schema] (None)");
+            }
         }
 
         // Print output type
