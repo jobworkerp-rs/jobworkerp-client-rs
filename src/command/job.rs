@@ -257,8 +257,9 @@ impl JobCommand {
                         let context = context.as_deref().unwrap_or("");
                         let job_args = serde_json::json!({
                             "workflow_url": serde_json::Value::String(workflow_file.clone()),
-                            "input": serde_json::from_str::<serde_json::Value>(input.as_str())
-                                .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
+                            "input": serde_json::Value::String(input.clone()),
+                            // serde_json::from_str::<serde_json::Value>(input.as_str())
+                            //     .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
                             "workflow_context": context,
                         });
                         JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)

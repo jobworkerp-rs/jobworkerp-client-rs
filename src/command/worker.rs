@@ -130,14 +130,12 @@ impl QueueTypeArg {
 pub enum ResponseTypeArg {
     NoResult,
     Direct,
-    ListenAfter,
 }
 impl ResponseTypeArg {
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "NO_RESULT" => Ok(Self::NoResult),
             "DIRECT" => Ok(Self::Direct),
-            "LISTEN_AFTER" => Ok(Self::ListenAfter),
             _ => Err(anyhow!("unknown response type: {}", s)),
         }
     }
@@ -202,7 +200,6 @@ impl WorkerCommand {
                     response_type: match response_type {
                         ResponseTypeArg::NoResult => ResponseType::NoResult as i32,
                         ResponseTypeArg::Direct => ResponseType::Direct as i32,
-                        ResponseTypeArg::ListenAfter => ResponseType::ListenAfter as i32,
                     },
                     store_success: *store_success,
                     store_failure: *store_failure,
