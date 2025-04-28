@@ -19,9 +19,23 @@ pub struct RunnerArg {
 
 #[derive(Parser, Debug)]
 pub enum RunnerCommand {
+    Create {
+        #[clap(short, long)]
+        name: String,
+        #[clap(short, long)]
+        description: String,
+        #[clap(short, long, help = "runner type (MCP_SERVER or PLUGIN)")]
+        runner_type: String,
+        #[clap(long)]
+        definition: String,
+    },
     Find {
         #[clap(short, long)]
         id: i64,
+    },
+    FindByName {
+        #[clap(short, long)]
+        name: String,
     },
     List {
         #[clap(short, long)]
@@ -39,12 +53,55 @@ pub enum RunnerCommand {
 impl RunnerCommand {
     pub async fn execute(&self, client: &JobworkerpClient) {
         match self {
+            RunnerCommand::Create {
+                name,
+                description,
+                runner_type,
+                definition,
+            } => {
+                let definition = if definition.starts_with("@") {
+                    let path = definition.trim_start_matches('@');
+                    std::fs::read_to_string(path).unwrap_or_else(|_| {
+                        panic!("Failed to read file: {}", path);
+                    })
+                } else {
+                    definition.clone()
+                };
+                let request = crate::jobworkerp::service::CreateRunnerRequest {
+                    name: name.clone(),
+                    description: description.clone(),
+                    runner_type: crate::jobworkerp::data::RunnerType::from_str_name(
+                        runner_type.as_str(),
+                    ).ok_or(
+                        "Invalid runner type (MCP_SERVER or PLUGIN)".to_string(),
+                    ).unwrap() as i32,
+                    definition: definition.clone(),
+                };
+                let response = client.runner_client().await.create(request).await.unwrap();
+                println!("{:#?}", response);
+            }
             RunnerCommand::Find { id } => {
                 let id = RunnerId { value: *id };
                 let response = client
                     .runner_client()
                     .await
                     .find(id)
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .data;
+                if let Some(data) = response {
+                    Self::print_runner(&data);
+                } else {
+                    println!("runner not found");
+                }
+            }
+            RunnerCommand::FindByName { name } => {
+                let request = crate::jobworkerp::service::RunnerNameRequest { name: name.clone() };
+                let response = client
+                    .runner_client()
+                    .await
+                    .find_by_name(request)
                     .await
                     .unwrap()
                     .into_inner()
