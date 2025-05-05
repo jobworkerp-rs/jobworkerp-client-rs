@@ -59,6 +59,7 @@ pub(crate) enum SubCommand {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let opts: Opts = Opts::parse();
     let address = opts.address.clone();
     let timeout = opts.timeout.map(Duration::from_millis);

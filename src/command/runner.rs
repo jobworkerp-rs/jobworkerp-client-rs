@@ -72,9 +72,9 @@ impl RunnerCommand {
                     description: description.clone(),
                     runner_type: crate::jobworkerp::data::RunnerType::from_str_name(
                         runner_type.as_str(),
-                    ).ok_or(
-                        "Invalid runner type (MCP_SERVER or PLUGIN)".to_string(),
-                    ).unwrap() as i32,
+                    )
+                    .ok_or("Invalid runner type (MCP_SERVER or PLUGIN)".to_string())
+                    .unwrap() as i32,
                     definition: definition.clone(),
                 };
                 let response = client.runner_client().await.create(request).await.unwrap();
