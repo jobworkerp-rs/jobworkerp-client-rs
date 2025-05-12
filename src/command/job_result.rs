@@ -249,7 +249,8 @@ impl JobResultCommand {
                             ProtobufDescriptor::print_dynamic_message(&mes, false);
                         }
                         Err(e) => {
-                            println!("error: {:#?}", e);
+                            println!("decode error: {:#?}", e);
+                            println!("original response as string: {:#?}", String::from_utf8_lossy(item));
                         }
                     }
                 }
