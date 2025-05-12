@@ -298,6 +298,36 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 .context("enqueue_worker_job")
         }
     }
+    // enqueue job for worker (use find_or_create_worker)
+    fn enqueue_stream_worker_job(
+        &self,
+        worker_data: &WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+    ) -> impl std::future::Future<
+        Output = Result<tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>>,
+    > + Send {
+        async move {
+            let worker = self.find_or_create_worker(worker_data).await?;
+            let mut job_cli = self.jobworkerp_client().job_client().await;
+            job_cli
+                .enqueue_for_stream(JobRequest {
+                    args,
+                    timeout: Some((timeout_sec * 1000).into()),
+                    worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
+                        worker.id.unwrap(),
+                    )),
+                    priority: priority.map(|p| p as i32), // higher priority for user slack response
+                    run_after_time,
+                    ..Default::default()
+                })
+                .await
+                .map(|r| r.into_inner())
+                .context("enqueue_worker_job")
+        }
+    }
     // enqueue job for worker and get output data
     fn enqueue_job_and_get_output(
         &self,

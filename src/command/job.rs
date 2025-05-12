@@ -279,21 +279,27 @@ impl JobCommand {
                             )
                         })
                         .unwrap();
-                    let response = helper
-                        .enqueue_worker_job(
+                    let mut response = helper
+                        .enqueue_stream_worker_job(
                             &worker_data,
                             args,
-                            timeout.map(|t| (t / 1000) as u32).unwrap_or_default(),
+                            timeout.map(|t| (t / 1000) as u32).unwrap_or(600),
                             *run_after_time,
                             priority.clone().map(|p| p.to_grpc()),
                         )
                         .await
                         .unwrap();
                     let _ = helper.delete_worker_by_name(wname.as_str()).await;
-                    if let Some(result) = response.result {
-                        JobResultCommand::print_job_result(&result, result_desc);
-                    } else {
-                        println!("{:#?}", response);
+                    while let Some(item) = response.message().await.unwrap() {
+                        if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item
+                        {
+                            JobResultCommand::print_job_result_output(
+                                v.as_slice(),
+                                result_desc.clone(),
+                            );
+                        } else {
+                            println!("{:#?}", response);
+                        }
                     }
                 } else {
                     println!(
