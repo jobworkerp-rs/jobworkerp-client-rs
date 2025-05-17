@@ -31,8 +31,8 @@ use clap::Parser;
 use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
-        function::FunctionArg, job::JobArg, job_result::JobResultArg, runner::RunnerArg,
-        worker::WorkerArg,
+        function::FunctionArg, function_set::FunctionSetArg, job::JobArg, job_result::JobResultArg,
+        runner::RunnerArg, worker::WorkerArg,
     },
 };
 use std::time::Duration;
@@ -53,6 +53,7 @@ pub(crate) enum SubCommand {
     Runner(RunnerArg),
     Worker(WorkerArg),
     Function(FunctionArg),
+    FunctionSet(FunctionSetArg),
     Job(JobArg),
     JobResult(JobResultArg),
 }
@@ -72,6 +73,9 @@ async fn main() {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Function(cmd) => {
+            cmd.cmd.execute(&client).await;
+        }
+        SubCommand::FunctionSet(cmd) => {
             cmd.cmd.execute(&client).await;
         }
         SubCommand::Job(cmd) => {

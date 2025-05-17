@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::str::FromStr;
 
 pub mod function;
+pub mod function_set;
 pub mod job;
 pub mod job_result;
 pub mod runner;

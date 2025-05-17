@@ -5,6 +5,14 @@ pub mod jobworkerp {
     pub mod service {
         tonic::include_proto!("jobworkerp.service");
     }
+    pub mod function {
+        pub mod data {
+            tonic::include_proto!("jobworkerp.function.data");
+        }
+        pub mod service {
+            tonic::include_proto!("jobworkerp.function.service");
+        }
+    }
 }
 pub mod built_in;
 pub mod client;

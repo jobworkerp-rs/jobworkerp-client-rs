@@ -1,11 +1,12 @@
 use super::UseJobworkerpClient;
 use crate::jobworkerp::data::{
-    FunctionSpecs, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy,
-    RetryType, Runner, Worker, WorkerData, WorkerId,
+    JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
+    Worker, WorkerData, WorkerId,
 };
+use crate::jobworkerp::function::data::FunctionSpecs;
+use crate::jobworkerp::function::service::FindFunctionRequest;
 use crate::jobworkerp::service::{
-    CreateJobResponse, FindFunctionRequest, FindListRequest, JobRequest, OptionalRunnerResponse,
-    WorkerNameRequest,
+    CreateJobResponse, FindListRequest, JobRequest, OptionalRunnerResponse, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};

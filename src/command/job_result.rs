@@ -250,7 +250,10 @@ impl JobResultCommand {
                         }
                         Err(e) => {
                             println!("decode error: {:#?}", e);
-                            println!("original response as string: {:#?}", String::from_utf8_lossy(item));
+                            println!(
+                                "original response as string: {:#?}",
+                                String::from_utf8_lossy(item)
+                            );
                         }
                     }
                 }
