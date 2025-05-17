@@ -264,6 +264,7 @@ impl JobCommand {
                         });
                         JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
                             .map_err(|e| {
+                                println!("Failed to parse job_args schema: {:#?}", &e);
                                 anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e)
                             })
                             .unwrap()
@@ -288,6 +289,9 @@ impl JobCommand {
                             priority.clone().map(|p| p.to_grpc()),
                         )
                         .await
+                        .inspect_err(|e| {
+                            println!("enqueue_stream_worker_job error: {:#?}", e);
+                        })
                         .unwrap();
                     let _ = helper.delete_worker_by_name(wname.as_str()).await;
                     while let Some(item) = response.message().await.unwrap() {

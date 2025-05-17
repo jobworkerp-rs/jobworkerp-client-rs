@@ -1,8 +1,9 @@
 use crate::{
     client::JobworkerpClient,
-    jobworkerp::{
+    jobworkerp::function::{
         data::{function_specs, FunctionSchema, FunctionSpecs, McpToolList},
         service::FindFunctionRequest,
+        service::FindFunctionSetRequest,
     },
 };
 use clap::Parser;
@@ -21,6 +22,10 @@ pub enum FunctionCommand {
         #[clap(long)]
         exclude_worker: bool,
     },
+    ListBySet {
+        #[clap(short, long)]
+        name: String,
+    },
 }
 
 impl FunctionCommand {
@@ -38,6 +43,24 @@ impl FunctionCommand {
                     .function_client()
                     .await
                     .find_list(request)
+                    .await
+                    .unwrap();
+                println!("meta: {:#?}", response.metadata());
+                let mut data = response.into_inner();
+                while let Some(function) = data.message().await.unwrap() {
+                    Self::print_function(&function);
+                }
+                println!(
+                    "trailer: {:#?}",
+                    data.trailers().await.unwrap().unwrap_or_default()
+                );
+            }
+            FunctionCommand::ListBySet { name } => {
+                let request = FindFunctionSetRequest { name: name.clone() };
+                let response = client
+                    .function_client()
+                    .await
+                    .find_list_by_set(request)
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());
