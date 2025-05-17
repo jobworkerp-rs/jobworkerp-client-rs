@@ -2,8 +2,11 @@ pub mod helper;
 pub mod wrapper;
 
 use crate::grpc::GrpcConnection;
-use crate::jobworkerp::service::{
+use crate::jobworkerp::function::service::{
     function_service_client::FunctionServiceClient,
+    function_set_service_client::FunctionSetServiceClient,
+};
+use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
     job_status_service_client::JobStatusServiceClient, runner_service_client::RunnerServiceClient,
@@ -44,6 +47,10 @@ impl JobworkerpClient {
     pub async fn function_client(&self) -> FunctionServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
         FunctionServiceClient::new(cell.clone())
+    }
+    pub async fn function_set_client(&self) -> FunctionSetServiceClient<tonic::transport::Channel> {
+        let cell = self.connection.read_channel().await;
+        FunctionSetServiceClient::new(cell.clone())
     }
     pub async fn job_client(&self) -> JobServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
