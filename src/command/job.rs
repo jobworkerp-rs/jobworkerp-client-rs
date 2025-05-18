@@ -28,6 +28,8 @@ use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 
+pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
+
 #[derive(Parser, Debug)]
 pub struct JobArg {
     #[clap(subcommand)]
@@ -295,15 +297,25 @@ impl JobCommand {
                         .unwrap();
                     let _ = helper.delete_worker_by_name(wname.as_str()).await;
                     while let Some(item) = response.message().await.unwrap() {
-                        if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item
-                        {
-                            JobResultCommand::print_job_result_output(
-                                v.as_slice(),
-                                result_desc.clone(),
-                            );
-                        } else {
-                            println!("{:#?}", response);
+                        match &item.item {
+                            Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
+                                JobResultCommand::print_job_result_output(
+                                    v.as_slice(),
+                                    result_desc.clone(),
+                                );
+                            }
+                            Some(jobworkerp::data::result_output_item::Item::End(_)) => {
+                                println!("end of stream");
+                            }
+                            None => {
+                                println!("no item");
+                            }
                         }
+                    }
+                    let trailers = response.trailers().await.unwrap().unwrap_or_default();
+                    if !trailers.is_empty() {
+                        let meta = trailers.get_all(JOB_RESULT_HEADER_NAME);
+                        println!("meta: {:#?}", meta);
                     }
                 } else {
                     println!(
