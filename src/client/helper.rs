@@ -4,7 +4,7 @@ use crate::jobworkerp::data::{
     Worker, WorkerData, WorkerId,
 };
 use crate::jobworkerp::function::data::FunctionSpecs;
-use crate::jobworkerp::function::service::FindFunctionRequest;
+use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
 use crate::jobworkerp::service::{
     CreateJobResponse, FindListRequest, JobRequest, OptionalRunnerResponse, WorkerNameRequest,
 };
@@ -38,6 +38,32 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync {
                 .find_list(tonic::Request::new(FindFunctionRequest {
                     exclude_runner,
                     exclude_worker,
+                }))
+                .await?;
+            let mut functions = Vec::new();
+            let mut stream = response.into_inner();
+            while let Some(t) = stream.next().await {
+                match t {
+                    Ok(t) => {
+                        functions.push(t);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(functions)
+        }
+    }
+    fn find_function_list_by_set(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<FunctionSpecs>>> + Send {
+        async move {
+            let response = self
+                .jobworkerp_client()
+                .function_client()
+                .await
+                .find_list_by_set(tonic::Request::new(FindFunctionSetRequest {
+                    name: name.to_string(),
                 }))
                 .await?;
             let mut functions = Vec::new();
