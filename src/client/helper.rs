@@ -286,6 +286,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_and_get_result_worker_job_with_runner(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -405,7 +406,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
                     worker
                         .id
-                        .clone()
                         .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?,
                 )),
                 priority: priority.map(|p| p as i32),
@@ -455,7 +455,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
                     worker
                         .id
-                        .clone()
                         .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?,
                 )),
                 priority: priority.map(|p| p as i32),
