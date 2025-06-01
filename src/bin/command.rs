@@ -70,7 +70,8 @@ async fn main() {
         file_name: Some(log_filename),
         ..conf
     })
-    .await.unwrap();
+    .await
+    .unwrap();
 
     let opts: Opts = Opts::parse();
     let address = opts.address.clone();
