@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use crate::{
     client::JobworkerpClient,
+    command::to_request,
     jobworkerp::function::{
         data::{function_specs, FunctionSchema, FunctionSpecs, McpToolList},
-        service::FindFunctionRequest,
-        service::FindFunctionSetRequest,
+        service::{FindFunctionRequest, FindFunctionSetRequest},
     },
 };
 use clap::Parser;
@@ -29,7 +31,7 @@ pub enum FunctionCommand {
 }
 
 impl FunctionCommand {
-    pub async fn execute(&self, client: &JobworkerpClient) {
+    pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
             FunctionCommand::List {
                 exclude_runner,
@@ -42,7 +44,7 @@ impl FunctionCommand {
                 let response = client
                     .function_client()
                     .await
-                    .find_list(request)
+                    .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());
@@ -60,7 +62,7 @@ impl FunctionCommand {
                 let response = client
                     .function_client()
                     .await
-                    .find_list_by_set(request)
+                    .find_list_by_set(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());

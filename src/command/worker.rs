@@ -14,6 +14,7 @@
 
 use crate::{
     client::helper::DEFAULT_RETRY_POLICY,
+    command::to_request,
     jobworkerp::{
         self,
         data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
@@ -24,7 +25,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
-use std::process::exit;
+use std::{collections::HashMap, process::exit};
 
 #[derive(Parser, Debug)]
 pub struct WorkerArg {
@@ -142,7 +143,11 @@ impl ResponseTypeArg {
 }
 
 impl WorkerCommand {
-    pub async fn execute(&self, client: &crate::client::JobworkerpClient) {
+    pub async fn execute(
+        &self,
+        client: &crate::client::JobworkerpClient,
+        metadata: &HashMap<String, String>,
+    ) {
         match self {
             WorkerCommand::Create {
                 name,
@@ -207,7 +212,12 @@ impl WorkerCommand {
                     retry_policy: Some(DEFAULT_RETRY_POLICY),
                     broadcast_results: *broadcast_results,
                 };
-                let response = client.worker_client().await.create(request).await.unwrap();
+                let response = client
+                    .worker_client()
+                    .await
+                    .create(to_request(metadata, request).unwrap())
+                    .await
+                    .unwrap();
                 println!("{:#?}", response);
             }
             WorkerCommand::Find { id } => {
@@ -215,7 +225,7 @@ impl WorkerCommand {
                 let response = client
                     .worker_client()
                     .await
-                    .find(id)
+                    .find(to_request(metadata, id).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -231,7 +241,7 @@ impl WorkerCommand {
                 let response = client
                     .worker_client()
                     .await
-                    .find_by_name(name)
+                    .find_by_name(to_request(metadata, name).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -246,10 +256,16 @@ impl WorkerCommand {
                 let response = client
                     .worker_client()
                     .await
-                    .find_list(jobworkerp::service::FindListRequest {
-                        offset: *offset,
-                        limit: *limit,
-                    })
+                    .find_list(
+                        to_request(
+                            metadata,
+                            jobworkerp::service::FindListRequest {
+                                offset: *offset,
+                                limit: *limit,
+                            },
+                        )
+                        .unwrap(),
+                    )
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());
@@ -281,7 +297,7 @@ impl WorkerCommand {
                 let res = client
                     .worker_client()
                     .await
-                    .find(WorkerId { value: *id })
+                    .find(to_request(metadata, WorkerId { value: *id }).unwrap())
                     .await
                     .unwrap();
                 let worker_opt = res.into_inner().data;
@@ -317,10 +333,16 @@ impl WorkerCommand {
                     let response = client
                         .worker_client()
                         .await
-                        .update(jobworkerp::data::Worker {
-                            id: Some(WorkerId { value: *id }),
-                            data: Some(worker_data),
-                        })
+                        .update(
+                            to_request(
+                                metadata,
+                                jobworkerp::data::Worker {
+                                    id: Some(WorkerId { value: *id }),
+                                    data: Some(worker_data),
+                                },
+                            )
+                            .unwrap(),
+                        )
                         .await
                         .unwrap();
                     println!("{:#?}", response);
@@ -330,14 +352,19 @@ impl WorkerCommand {
             }
             WorkerCommand::Delete { id } => {
                 let id = WorkerId { value: *id };
-                let response = client.worker_client().await.delete(id).await.unwrap();
+                let response = client
+                    .worker_client()
+                    .await
+                    .delete(to_request(metadata, id).unwrap())
+                    .await
+                    .unwrap();
                 println!("{:#?}", response);
             }
             WorkerCommand::Count {} => {
                 let response = client
                     .worker_client()
                     .await
-                    .count(CountCondition {})
+                    .count(to_request(metadata, CountCondition {}).unwrap())
                     .await
                     .unwrap();
                 println!("{:#?}", response);

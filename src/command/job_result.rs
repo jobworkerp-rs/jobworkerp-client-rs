@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
-use super::WorkerIdOrName;
+use super::{to_request, WorkerIdOrName};
 use crate::jobworkerp;
 use crate::jobworkerp::data::{JobId, JobResult, JobResultId};
 use crate::jobworkerp::service::{
@@ -65,11 +66,20 @@ pub enum JobResultCommand {
 
 impl JobResultCommand {
     const RESULT_HEADER_NAME: &str = "x-job-result-bin";
-    pub async fn execute(&self, client: &crate::client::JobworkerpClient) {
+    pub async fn execute(
+        &self,
+        client: &crate::client::JobworkerpClient,
+        metadata: &HashMap<String, String>,
+    ) {
         match self {
             JobResultCommand::Find { id } => {
                 let id = JobResultId { value: *id };
-                let response = client.job_result_client().await.find(id).await.unwrap();
+                let response = client
+                    .job_result_client()
+                    .await
+                    .find(to_request(metadata, id).unwrap())
+                    .await
+                    .unwrap();
                 match response.into_inner().data {
                     Some(job_res) => {
                         Self::print_job_result_with_request(client, job_res).await;
@@ -92,7 +102,7 @@ impl JobResultCommand {
                 let response = client
                     .job_result_client()
                     .await
-                    .listen(req)
+                    .listen(to_request(metadata, req).unwrap())
                     .await
                     .unwrap()
                     .into_inner();
@@ -117,7 +127,7 @@ impl JobResultCommand {
                 let response = client
                     .job_result_client()
                     .await
-                    .listen_stream(req)
+                    .listen_stream(to_request(metadata, req).unwrap())
                     .await
                     .unwrap();
 
@@ -143,7 +153,7 @@ impl JobResultCommand {
                 let mut response = client
                     .job_result_client()
                     .await
-                    .listen_by_worker(req)
+                    .listen_by_worker(to_request(metadata, req).unwrap())
                     .await
                     .unwrap()
                     .into_inner();
@@ -160,7 +170,7 @@ impl JobResultCommand {
                 let response = client
                     .job_result_client()
                     .await
-                    .find_list(request)
+                    .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 let mut response = response.into_inner();
@@ -175,7 +185,7 @@ impl JobResultCommand {
                 let mut response = client
                     .job_result_client()
                     .await
-                    .find_list_by_job_id(tonic::Request::new(request))
+                    .find_list_by_job_id(to_request(metadata, request).unwrap())
                     .await
                     .unwrap()
                     .into_inner();
@@ -185,14 +195,19 @@ impl JobResultCommand {
             }
             JobResultCommand::Delete { id } => {
                 let id = JobResultId { value: *id };
-                let response = client.job_result_client().await.delete(id).await.unwrap();
+                let response = client
+                    .job_result_client()
+                    .await
+                    .delete(to_request(metadata, id).unwrap())
+                    .await
+                    .unwrap();
                 println!("{:#?}", response);
             }
             JobResultCommand::Count {} => {
                 let response = client
                     .job_result_client()
                     .await
-                    .count(CountCondition {}) // TODO
+                    .count(to_request(metadata, CountCondition {}).unwrap()) // TODO
                     .await
                     .unwrap();
                 println!("{:#?}", response);

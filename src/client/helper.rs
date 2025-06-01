@@ -1,4 +1,5 @@
 use super::UseJobworkerpClient;
+use crate::command::to_request;
 use crate::jobworkerp::data::{
     JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
     Worker, WorkerData, WorkerId,
@@ -16,7 +17,9 @@ use command_utils::util::datetime;
 use command_utils::util::scoped_cache::ScopedCache;
 use infra_utils::infra::trace::Tracing;
 use rand;
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
+use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
@@ -30,6 +33,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn find_function_list<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         exclude_runner: bool,
         exclude_worker: bool,
     ) -> impl std::future::Future<Output = Result<Vec<FunctionSpecs>>> + Send + 'a {
@@ -48,7 +52,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let response = client_clone
                         .function_client()
                         .await
-                        .find_list(request)
+                        .find_list(to_request(&metadata, request)?)
                         .await
                         .map_err(|e| anyhow!(e))?;
                     let mut functions = Vec::new();
@@ -71,6 +75,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn find_function_list_by_set<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         name: &'a str,
     ) -> impl std::future::Future<Output = Result<Vec<FunctionSpecs>>> + Send + 'a {
         async move {
@@ -86,7 +91,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let response = client_clone
                         .function_client()
                         .await
-                        .find_list_by_set(request)
+                        .find_list_by_set(to_request(&metadata, request)?)
                         .await
                         .map_err(|e| anyhow!(e))?;
                     let mut functions = Vec::new();
@@ -109,6 +114,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn find_runner_by_name<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         name: &'a str,
     ) -> impl std::future::Future<Output = Result<Option<Runner>>> + Send + 'a
     where
@@ -131,7 +137,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let mut runner_client = client_clone.runner_client().await;
                     // TODO find by name
                     let mut stream = runner_client
-                        .find_list(request)
+                        .find_list(to_request(&metadata, request)?)
                         .await
                         .map_err(|e| anyhow!(e))?
                         .into_inner();
@@ -155,6 +161,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn find_worker_by_name<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         name: &'a str,
     ) -> impl std::future::Future<Output = Result<Option<(WorkerId, WorkerData)>>> + Send + 'a
     where
@@ -172,7 +179,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 move |request| async move {
                     let mut worker_cli = client_clone.worker_client().await;
                     let worker_response = worker_cli
-                        .find_by_name(request)
+                        .find_by_name(to_request(&metadata, request)?)
                         .await
                         .map_err(|e| anyhow!(e))?;
 
@@ -196,6 +203,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn find_runner_by_name_with_cache(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         cache: &ScopedCache<String, Option<Runner>>,
         name: &str,
     ) -> impl std::future::Future<Output = Result<Option<Runner>>> + Send
@@ -206,13 +214,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             cache_ok!(
                 cache,
                 format!("runner:{}", name),
-                self.find_runner_by_name(cx, name)
+                self.find_runner_by_name(cx, metadata, name)
             )
         }
     }
     fn find_or_create_worker<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
     ) -> impl std::future::Future<Output = Result<Worker>> + Send + 'a {
         async move {
@@ -223,6 +232,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 name: worker_name_for_find,
             });
 
+            let metadata_clone = metadata.clone();
             let found_worker_opt_res: Result<Option<Worker>> =
                 Self::trace_grpc_client_with_request(
                     cx.cloned(),
@@ -236,7 +246,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             client_clone_inner
                                 .worker_client()
                                 .await
-                                .find_by_name(req)
+                                .find_by_name(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|response| response.into_inner().data)
                                 .map_err(|e| anyhow!(e))
@@ -254,6 +264,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let create_request_data = worker_data.clone();
                 let create_tonic_request = tonic::Request::new(create_request_data);
 
+                let metadata_clone = metadata.clone();
                 let created_worker_id_opt_res: Result<Option<WorkerId>> =
                     Self::trace_grpc_client_with_request(
                         cx.cloned(),
@@ -267,7 +278,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                 client_clone_inner_create
                                     .worker_client()
                                     .await
-                                    .create(req)
+                                    .create(to_request(&metadata_clone, req)?)
                                     .await
                                     .map(|response| response.into_inner().id)
                                     .map_err(|e| anyhow!(e))
@@ -290,6 +301,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_and_get_result_worker_job_with_runner(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         runner_name: &str,
         mut worker_data: WorkerData,
         args: Vec<u8>,
@@ -298,12 +310,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            let runner = self.find_runner_by_name(cx, runner_name).await?;
+            let runner = self
+                .find_runner_by_name(cx, metadata.clone(), runner_name)
+                .await?;
             worker_data.runner_id = runner.and_then(|r| r.id);
             tracing::debug!("resolved runner_id: {:?}", &worker_data.runner_id);
             let res = self
                 .enqueue_and_get_result_worker_job(
                     cx,
+                    metadata,
                     &worker_data,
                     args,
                     timeout_sec,
@@ -328,6 +343,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_and_get_result_worker_job(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
@@ -335,17 +351,26 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            self.enqueue_worker_job(cx, worker_data, args, timeout_sec, run_after_time, priority)
-                .await?
-                .result
-                .ok_or(anyhow!("result not found"))?
-                .data
-                .ok_or(anyhow!("result data not found"))
+            self.enqueue_worker_job(
+                cx,
+                metadata,
+                worker_data,
+                args,
+                timeout_sec,
+                run_after_time,
+                priority,
+            )
+            .await?
+            .result
+            .ok_or(anyhow!("result not found"))?
+            .data
+            .ok_or(anyhow!("result data not found"))
         }
     }
     fn enqueue_and_get_output_worker_job(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
@@ -356,6 +381,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let res = self
                 .enqueue_and_get_result_worker_job(
                     cx,
+                    metadata,
                     worker_data,
                     args,
                     timeout_sec,
@@ -392,6 +418,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_worker_job<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
@@ -399,7 +426,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
     ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send + 'a {
         async move {
-            let worker = self.find_or_create_worker(cx, worker_data).await?;
+            let worker = self
+                .find_or_create_worker(cx, metadata.clone(), worker_data)
+                .await?;
             let job_request_payload = JobRequest {
                 args,
                 timeout: Some((timeout_sec * 1000).into()),
@@ -425,7 +454,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     client_clone
                         .job_client()
                         .await
-                        .enqueue(req)
+                        .enqueue(to_request(&metadata, req)?)
                         .await
                         .map(|r| r.into_inner())
                         .map_err(|e| anyhow!(e))
@@ -438,6 +467,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_stream_worker_job<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
@@ -448,7 +478,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     > + Send
            + 'a {
         async move {
-            let worker = self.find_or_create_worker(cx, worker_data).await?;
+            let worker = self
+                .find_or_create_worker(cx, metadata.clone(), worker_data)
+                .await?;
             let job_request_payload = JobRequest {
                 args,
                 timeout: Some((timeout_sec * 1000).into()),
@@ -463,6 +495,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             };
             let tonic_request = tonic::Request::new(job_request_payload);
             let client_clone = self.jobworkerp_client().clone();
+            let metadata_clone = metadata.clone();
 
             Self::trace_grpc_client_with_request(
                 cx.cloned(),
@@ -474,7 +507,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     client_clone
                         .job_client()
                         .await
-                        .enqueue_for_stream(req)
+                        .enqueue_for_stream(to_request(&metadata_clone, req)?)
                         .await
                         .map(|r| r.into_inner())
                         .map_err(|e| anyhow!(e))
@@ -487,6 +520,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_job_and_get_output<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_spec: crate::jobworkerp::service::job_request::Worker,
         args: Vec<u8>,
         timeout_sec: u32,
@@ -513,7 +547,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let response = client_clone
                         .job_client()
                         .await
-                        .enqueue(req)
+                        .enqueue(to_request(&metadata, req)?)
                         .await
                         .map_err(|e| anyhow!(e))?;
                     let job_response = response.into_inner();
@@ -553,6 +587,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn setup_worker_and_enqueue_with_raw_output(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         name: &str,
         runner_settings: Vec<u8>,
         worker_params: Option<serde_json::Value>,
@@ -564,7 +599,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             if let Some(Runner {
                 id: Some(sid),
                 data: Some(_sdata),
-            }) = self.find_runner_by_name(cx, name.as_str()).await?
+            }) = self
+                .find_runner_by_name(cx, metadata.clone(), name.as_str())
+                .await?
             {
                 let mut worker: WorkerData =
                     if let Some(serde_json::Value::Object(obj)) = worker_params {
@@ -631,11 +668,19 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 if let Worker {
                     id: Some(wid),
                     data: Some(wdata),
-                } = self.find_or_create_worker(cx, &worker).await?
+                } = self
+                    .find_or_create_worker(cx, metadata.clone(), &worker)
+                    .await?
                 {
                     let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
                     let output = self
-                        .enqueue_job_and_get_output(cx, w, job_args, job_timeout_sec)
+                        .enqueue_job_and_get_output(
+                            cx,
+                            metadata.clone(),
+                            w,
+                            job_args,
+                            job_timeout_sec,
+                        )
                         .await
                         .inspect_err(|e| {
                             tracing::warn!(
@@ -650,7 +695,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             .jobworkerp_client()
                             .worker_client()
                             .await
-                            .delete(wid)
+                            .delete(to_request(&metadata, wid)?)
                             .await?
                             .into_inner();
                         if !deleted.is_success {
@@ -672,6 +717,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn setup_worker_and_enqueue(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         runner_name: &str,
         runner_settings: Vec<u8>,
         worker_params: Option<serde_json::Value>,
@@ -682,12 +728,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             if let Some(Runner {
                 id: Some(_sid),
                 data: Some(sdata),
-            }) = self.find_runner_by_name(cx, runner_name).await?
+            }) = self
+                .find_runner_by_name(cx, metadata.clone(), runner_name)
+                .await?
             {
                 let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
                 let output = self
                     .setup_worker_and_enqueue_with_raw_output(
                         cx,
+                        metadata,
                         runner_name,
                         runner_settings,
                         worker_params,
@@ -725,6 +774,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn setup_worker_and_enqueue_with_json(
         &self,
         cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         runner_name: &str,
         runner_settings: Option<serde_json::Value>,
         worker_params: Option<serde_json::Value>,
@@ -735,7 +785,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             if let Some(Runner {
                 id: Some(_sid),
                 data: Some(sdata),
-            }) = self.find_runner_by_name(cx, runner_name).await?
+            }) = self
+                .find_runner_by_name(cx, metadata.clone(), runner_name)
+                .await?
             {
                 let runner_settings_descriptor =
                     JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata).map_err(
@@ -775,6 +827,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 };
                 self.setup_worker_and_enqueue(
                     cx,
+                    metadata,
                     runner_name,
                     runner_settings,
                     worker_params,
@@ -794,6 +847,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn enqueue_with_json<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         job_args: serde_json::Value,
         job_timeout_sec: u32,
@@ -808,6 +862,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
 
             let client_clone = self.jobworkerp_client().clone();
             let find_runner_request = tonic::Request::new(runner_id);
+            let metadata_clone = metadata.clone();
 
             let runner_response_opt_res: Result<Option<Runner>> =
                 Self::trace_grpc_client_with_request(
@@ -822,7 +877,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             client_clone_inner
                                 .runner_client()
                                 .await
-                                .find(req)
+                                .find(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|response| response.into_inner().data)
                                 .map_err(|e| anyhow!(e))
@@ -854,6 +909,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let output_bytes = self
                     .enqueue_and_get_output_worker_job(
                         cx,
+                        metadata,
                         worker_data,
                         job_args_bytes,
                         job_timeout_sec,
@@ -895,6 +951,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     fn delete_worker_by_name<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
         name: &'a str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
         async move {
@@ -905,6 +962,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 name: worker_name_owned.clone(),
             });
 
+            let metadata_clone = metadata.clone();
             let worker_to_delete_opt_res: Result<Option<Worker>> =
                 Self::trace_grpc_client_with_request(
                     cx.cloned(),
@@ -918,7 +976,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             client_clone_inner_find
                                 .worker_client()
                                 .await
-                                .find_by_name(req)
+                                .find_by_name(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|r| r.into_inner().data)
                                 .map_err(|e| anyhow!(e))
@@ -942,7 +1000,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             client_clone
                                 .worker_client()
                                 .await
-                                .delete(req)
+                                .delete(to_request(&metadata, req)?)
                                 .await
                                 .map(|r| r.into_inner().is_success)
                                 .map_err(|e| anyhow!(e))

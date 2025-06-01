@@ -6,7 +6,8 @@ use crate::jobworkerp::{
 };
 use anyhow::Result;
 use serde::Deserialize;
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
+use tonic::metadata;
 
 pub mod function;
 pub mod function_set;
@@ -56,4 +57,20 @@ impl FromStr for WorkerIdOrName {
             Ok(WorkerIdOrName::Name(s.to_string()))
         }
     }
+}
+
+pub fn to_request<T>(
+    metadata: &HashMap<String, String>,
+    request: impl tonic::IntoRequest<T>,
+) -> Result<tonic::Request<T>> {
+    let mut request = request.into_request();
+    if !metadata.is_empty() {
+        for (key, value) in metadata.iter() {
+            request.metadata_mut().insert(
+                metadata::MetadataKey::from_bytes(key.as_bytes())?,
+                metadata::MetadataValue::try_from(value.as_str())?,
+            );
+        }
+    }
+    Ok(request)
 }

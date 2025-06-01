@@ -3,8 +3,11 @@
 // --offset <offset> offset of the list (for list)
 // --limit <limit> limit of the list (for list)
 
+use std::collections::HashMap;
+
 use crate::{
     client::JobworkerpClient,
+    command::to_request,
     jobworkerp::{
         data::{Runner, RunnerId},
         service::{CountCondition, FindListRequest},
@@ -51,7 +54,7 @@ pub enum RunnerCommand {
 }
 
 impl RunnerCommand {
-    pub async fn execute(&self, client: &JobworkerpClient) {
+    pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
             RunnerCommand::Create {
                 name,
@@ -77,7 +80,12 @@ impl RunnerCommand {
                     .unwrap() as i32,
                     definition: definition.clone(),
                 };
-                let response = client.runner_client().await.create(request).await.unwrap();
+                let response = client
+                    .runner_client()
+                    .await
+                    .create(to_request(metadata, request).unwrap())
+                    .await
+                    .unwrap();
                 println!("{:#?}", response);
             }
             RunnerCommand::Find { id } => {
@@ -85,7 +93,7 @@ impl RunnerCommand {
                 let response = client
                     .runner_client()
                     .await
-                    .find(id)
+                    .find(to_request(metadata, id).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -101,7 +109,7 @@ impl RunnerCommand {
                 let response = client
                     .runner_client()
                     .await
-                    .find_by_name(request)
+                    .find_by_name(to_request(metadata, request).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -120,7 +128,7 @@ impl RunnerCommand {
                 let response = client
                     .runner_client()
                     .await
-                    .find_list(request)
+                    .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());
@@ -142,7 +150,7 @@ impl RunnerCommand {
                 let response = client
                     .runner_client()
                     .await
-                    .count(CountCondition {})
+                    .count(to_request(metadata, CountCondition {}).unwrap())
                     .await
                     .unwrap();
                 println!("{:#?}", response.into_inner().total);

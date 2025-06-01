@@ -6,9 +6,14 @@
 // -c, --category <number> category of the function set (for create, update)
 // -t, --targets <json array string> targets of the function set (for create, update)
 
-use crate::jobworkerp::function::{
-    data::{FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType},
-    service::FindByNameRequest,
+use std::collections::HashMap;
+
+use crate::{
+    command::to_request,
+    jobworkerp::function::{
+        data::{FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType},
+        service::FindByNameRequest,
+    },
 };
 use clap::Parser;
 use serde_json::Value;
@@ -65,7 +70,11 @@ pub enum FunctionSetCommand {
 }
 
 impl FunctionSetCommand {
-    pub async fn execute(&self, client: &crate::client::JobworkerpClient) {
+    pub async fn execute(
+        &self,
+        client: &crate::client::JobworkerpClient,
+        metadata: &HashMap<String, String>,
+    ) {
         match self {
             FunctionSetCommand::Create {
                 name,
@@ -83,7 +92,7 @@ impl FunctionSetCommand {
                 let response = client
                     .function_set_client()
                     .await
-                    .create(request)
+                    .create(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("{:#?}", response);
@@ -93,7 +102,7 @@ impl FunctionSetCommand {
                 let response = client
                     .function_set_client()
                     .await
-                    .find(id)
+                    .find(to_request(metadata, id).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -109,7 +118,7 @@ impl FunctionSetCommand {
                 let response = client
                     .function_set_client()
                     .await
-                    .find_by_name(request)
+                    .find_by_name(to_request(metadata, request).unwrap())
                     .await
                     .unwrap()
                     .into_inner()
@@ -124,10 +133,16 @@ impl FunctionSetCommand {
                 let response = client
                     .function_set_client()
                     .await
-                    .find_list(crate::jobworkerp::service::FindListRequest {
-                        offset: *offset,
-                        limit: *limit,
-                    })
+                    .find_list(
+                        to_request(
+                            metadata,
+                            crate::jobworkerp::service::FindListRequest {
+                                offset: *offset,
+                                limit: *limit,
+                            },
+                        )
+                        .unwrap(),
+                    )
                     .await
                     .unwrap();
                 println!("meta: {:#?}", response.metadata());
@@ -151,7 +166,7 @@ impl FunctionSetCommand {
                 let res = client
                     .function_set_client()
                     .await
-                    .find(FunctionSetId { value: *id })
+                    .find(to_request(metadata, FunctionSetId { value: *id }).unwrap())
                     .await
                     .unwrap();
                 let function_set_opt = res.into_inner().data;
@@ -167,7 +182,7 @@ impl FunctionSetCommand {
                     let response = client
                         .function_set_client()
                         .await
-                        .update(function_set)
+                        .update(to_request(metadata, function_set).unwrap())
                         .await
                         .unwrap();
                     println!("{:#?}", response);
@@ -177,14 +192,22 @@ impl FunctionSetCommand {
             }
             FunctionSetCommand::Delete { id } => {
                 let id = FunctionSetId { value: *id };
-                let response = client.function_set_client().await.delete(id).await.unwrap();
+                let response = client
+                    .function_set_client()
+                    .await
+                    .delete(to_request(metadata, id).unwrap())
+                    .await
+                    .unwrap();
                 println!("{:#?}", response);
             }
             FunctionSetCommand::Count {} => {
                 let response = client
                     .function_set_client()
                     .await
-                    .count(crate::jobworkerp::service::CountCondition {})
+                    .count(
+                        to_request(metadata, crate::jobworkerp::service::CountCondition {})
+                            .unwrap(),
+                    )
                     .await
                     .unwrap();
                 println!("{:#?}", response);
