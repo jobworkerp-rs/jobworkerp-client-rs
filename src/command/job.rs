@@ -8,14 +8,16 @@
 // -t, --timeout <timeout> timeout of the job (milli-seconds) (for enqueue)
 
 use std::{
+    collections::HashMap,
     hash::{DefaultHasher, Hasher},
     str::FromStr,
+    sync::Arc,
 };
 
 use super::WorkerIdOrName;
 use crate::{
     client::{helper::UseJobworkerpClientHelper, UseJobworkerpClient},
-    command::job_result::JobResultCommand,
+    command::{job_result::JobResultCommand, to_request},
     jobworkerp::{
         self,
         data::{JobId, Priority, QueueType, ResponseType, Runner, RunnerType, WorkerData},
@@ -134,7 +136,11 @@ impl JobCommand {
 
         (span, new_context_with_span_active)
     }
-    pub async fn execute(&self, client: &crate::client::JobworkerpClient) {
+    pub async fn execute(
+        &self,
+        client: &crate::client::JobworkerpClient,
+        metadata: Arc<HashMap<String, String>>,
+    ) {
         match self {
             JobCommand::Enqueue {
                 worker,
@@ -164,7 +170,7 @@ impl JobCommand {
                 let response = client
                     .job_client()
                     .await
-                    .enqueue(request)
+                    .enqueue(to_request(&metadata, request).unwrap())
                     .await
                     .unwrap()
                     .into_inner();
@@ -202,7 +208,7 @@ impl JobCommand {
                 let response = client
                     .job_client()
                     .await
-                    .enqueue_for_stream(request)
+                    .enqueue_for_stream(to_request(&metadata, request).unwrap())
                     .await
                     .unwrap();
 
@@ -240,7 +246,11 @@ impl JobCommand {
                 let cx = Some(cx);
 
                 let runner = helper
-                    .find_runner_by_name(cx.as_ref(), RunnerType::InlineWorkflow.as_str_name())
+                    .find_runner_by_name(
+                        cx.as_ref(),
+                        metadata.clone(),
+                        RunnerType::InlineWorkflow.as_str_name(),
+                    )
                     .await
                     .unwrap();
                 if let Some(Runner {
@@ -307,6 +317,7 @@ impl JobCommand {
                     let mut response = helper
                         .enqueue_stream_worker_job(
                             cx.as_ref(),
+                            metadata.clone(),
                             &worker_data,
                             args,
                             timeout.map(|t| (t / 1000) as u32).unwrap_or(600),
@@ -319,7 +330,7 @@ impl JobCommand {
                         })
                         .unwrap();
                     let _ = helper
-                        .delete_worker_by_name(cx.as_ref(), wname.as_str())
+                        .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
                         .await;
                     while let Some(item) = response.message().await.unwrap() {
                         match &item.item {

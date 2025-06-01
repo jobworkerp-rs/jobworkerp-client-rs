@@ -36,7 +36,7 @@ use jobworkerp_client::{
         runner::RunnerArg, worker::WorkerArg,
     },
 };
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[derive(Parser, Debug)]
 #[clap(name = "jobworkerp-cli", version = "0.5.2", author = "sutr")]
@@ -72,6 +72,15 @@ async fn main() {
     })
     .await
     .unwrap();
+    let session_id = std::env::var("SESSION_ID").unwrap_or_else(|_| {
+        tracing::info!("SESSION_ID not set, generating a new one");
+        uuid::Uuid::new_v4().to_string()
+    });
+    let user_id = std::env::var("USER_ID").unwrap_or_else(|_| "unknown".to_string());
+    let metadata = HashMap::from([
+        ("session_id".to_string(), session_id),
+        ("user_id".to_string(), user_id),
+    ]);
 
     let opts: Opts = Opts::parse();
     let address = opts.address.clone();
@@ -79,22 +88,22 @@ async fn main() {
     let client = JobworkerpClient::new(address, timeout).await.unwrap();
     match opts.subcmd {
         SubCommand::Runner(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, &metadata).await;
         }
         SubCommand::Worker(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, &metadata).await;
         }
         SubCommand::Function(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, &metadata).await;
         }
         SubCommand::FunctionSet(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, &metadata).await;
         }
         SubCommand::Job(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, Arc::new(metadata)).await;
         }
         SubCommand::JobResult(cmd) => {
-            cmd.cmd.execute(&client).await;
+            cmd.cmd.execute(&client, &metadata).await;
         }
     }
     command_utils::util::tracing::shutdown_tracer_provider();
