@@ -27,6 +27,8 @@ use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
+use infra_utils::infra::trace::Tracing;
+use opentelemetry::{global, trace::Span, Context};
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
 
@@ -116,6 +118,22 @@ impl PriorityArg {
 }
 
 impl JobCommand {
+    fn create_parent_span(
+        &self,
+        tracer_name: &'static str,
+        span_name: &'static str,
+    ) -> (opentelemetry::global::BoxedSpan, Context) {
+        use opentelemetry::trace::{TraceContextExt, Tracer};
+
+        let context = Context::current();
+        let tracer = global::tracer(tracer_name);
+        let builder = tracer.span_builder(span_name);
+        let span = tracer.build_with_context(builder, &context);
+        let new_context_with_span_active =
+            context.with_remote_span_context(span.span_context().clone());
+
+        (span, new_context_with_span_active)
+    }
     pub async fn execute(&self, client: &crate::client::JobworkerpClient) {
         match self {
             JobCommand::Enqueue {
@@ -217,8 +235,12 @@ impl JobCommand {
                 workflow_file,
             } => {
                 let helper = JobCommandHelper::new(client.clone());
+                let (_span, cx) =
+                    self.create_parent_span("jobworkerp-client", "JobCommand::EnqueueWorkflow");
+                let cx = Some(cx);
+
                 let runner = helper
-                    .find_runner_by_name(RunnerType::InlineWorkflow.as_str_name())
+                    .find_runner_by_name(cx.as_ref(), RunnerType::InlineWorkflow.as_str_name())
                     .await
                     .unwrap();
                 if let Some(Runner {
@@ -284,6 +306,7 @@ impl JobCommand {
                         .unwrap();
                     let mut response = helper
                         .enqueue_stream_worker_job(
+                            cx.as_ref(),
                             &worker_data,
                             args,
                             timeout.map(|t| (t / 1000) as u32).unwrap_or(600),
@@ -295,7 +318,9 @@ impl JobCommand {
                             println!("enqueue_stream_worker_job error: {:#?}", e);
                         })
                         .unwrap();
-                    let _ = helper.delete_worker_by_name(wname.as_str()).await;
+                    let _ = helper
+                        .delete_worker_by_name(cx.as_ref(), wname.as_str())
+                        .await;
                     while let Some(item) = response.message().await.unwrap() {
                         match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
@@ -432,3 +457,4 @@ impl UseJobworkerpClient for JobCommandHelper {
     }
 }
 impl UseJobworkerpClientHelper for JobCommandHelper {}
+impl Tracing for JobCommandHelper {}
