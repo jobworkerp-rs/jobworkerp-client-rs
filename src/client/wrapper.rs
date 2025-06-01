@@ -1,6 +1,7 @@
 use super::helper::UseJobworkerpClientHelper;
 use crate::client::{JobworkerpClient, UseJobworkerpClient};
 use anyhow::Result;
+use infra_utils::infra::trace::Tracing;
 use std::time::Duration;
 
 // jobworker client wrapper
@@ -14,6 +15,7 @@ impl UseJobworkerpClient for JobworkerpClientWrapper {
     }
 }
 impl UseJobworkerpClientHelper for JobworkerpClientWrapper {}
+impl Tracing for JobworkerpClientWrapper {}
 
 impl JobworkerpClientWrapper {
     pub async fn new(
