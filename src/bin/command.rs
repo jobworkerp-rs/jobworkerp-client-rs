@@ -28,6 +28,7 @@
 // -i, --id <id> id of the job
 
 use clap::Parser;
+use command_utils::util::tracing::LoggingConfig;
 use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
@@ -61,6 +62,16 @@ pub(crate) enum SubCommand {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+    // node specific str (based on ip)
+    let log_filename =
+        command_utils::util::tracing::create_filename_with_ip_postfix("jobworkerp-client", "log");
+    let conf = command_utils::util::tracing::load_tracing_config_from_env().unwrap_or_default();
+    command_utils::util::tracing::tracing_init(LoggingConfig {
+        file_name: Some(log_filename),
+        ..conf
+    })
+    .await.unwrap();
+
     let opts: Opts = Opts::parse();
     let address = opts.address.clone();
     let timeout = opts.timeout.map(Duration::from_millis);
@@ -85,4 +96,5 @@ async fn main() {
             cmd.cmd.execute(&client).await;
         }
     }
+    command_utils::util::tracing::shutdown_tracer_provider();
 }
