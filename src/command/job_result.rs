@@ -233,6 +233,7 @@ impl JobResultCommand {
         if let jobworkerp::data::JobResult {
             id: Some(rid),
             data: Some(rdata),
+            metadata: _,
         } = job_result
         {
             println!("[job_result]:\n\t[id] {}", &rid.value);
@@ -257,9 +258,9 @@ impl JobResultCommand {
             }
             let output = rdata.output.as_ref().unwrap();
             if let Some(proto) = result_proto.as_ref() {
-                for item in output.items.iter() {
-                    match ProtobufDescriptor::get_message_from_bytes(proto.clone(), item.as_slice())
-                    {
+                let item = output.items.as_slice();
+                if !item.is_empty() {
+                    match ProtobufDescriptor::get_message_from_bytes(proto.clone(), item) {
                         Ok(mes) => {
                             ProtobufDescriptor::print_dynamic_message(&mes, false);
                         }
@@ -272,10 +273,11 @@ impl JobResultCommand {
                         }
                     }
                 }
-            } else if !output.items.is_empty() && !output.items[0].is_empty() {
-                for item in output.items.iter() {
-                    println!("\t[output]: |\n {}", String::from_utf8_lossy(item));
-                }
+            } else if !output.items.is_empty() {
+                println!(
+                    "\t[output]: |\n {}",
+                    String::from_utf8_lossy(output.items.as_slice())
+                );
             }
             // flush stdout
             std::io::Write::flush(&mut std::io::stdout()).unwrap();

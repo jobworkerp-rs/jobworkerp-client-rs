@@ -331,11 +331,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             } else {
                 Err(anyhow!(
                     "job failed: {:?}",
-                    res.output.and_then(|o| o
-                        .items
-                        .first()
-                        .cloned()
-                        .map(|e| String::from_utf8_lossy(&e).into_owned()))
+                    res.output
+                        .map(|o| String::from_utf8_lossy(&o.items).into_owned())
                 ))
             }
         }
@@ -395,22 +392,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .as_ref()
                     .ok_or(anyhow!("job result output is empty: {:?}", res))?
                     .items
-                    .first()
-                    .ok_or(anyhow!(
-                        "{} job result output first is empty: {:?}",
-                        &worker_data.name,
-                        res
-                    ))?
                     .to_owned();
                 Ok(output)
             } else {
                 Err(anyhow!(
                     "job failed: {:?}",
-                    res.output.and_then(|o| o
-                        .items
-                        .first()
-                        .cloned()
-                        .map(|e| String::from_utf8_lossy(&e).into_owned()))
+                    res.output
+                        .map(|o| String::from_utf8_lossy(&o.items).into_owned())
                 ))
             }
         }
@@ -569,16 +557,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .output
                     .ok_or(anyhow!("job result output is empty"))?
                     .items
-                    .into_iter()
-                    .next()
-                    .ok_or(anyhow!("job result output first is empty"))?;
+                    .to_owned();
                 Ok(output_item)
             } else {
                 let error_message = res
                     .output
                     .as_ref()
-                    .and_then(|o| o.items.first())
-                    .map(|e_bytes| String::from_utf8_lossy(e_bytes).into_owned())
+                    .map(|e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned())
                     .unwrap_or_else(|| format!("job failed with status: {:?}", res.status()));
                 Err(anyhow!("job failed: {}", error_message))
             }
