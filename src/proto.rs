@@ -312,7 +312,7 @@ impl JobworkerpProto {
                     "".to_string()
                 }
             }
-            Some(output) => String::from_utf8_lossy(&output.items.as_slice()).into_owned(),
+            Some(output) => String::from_utf8_lossy(output.items.as_slice()).into_owned(),
             None => "".to_string(),
         };
         Ok(output_text)

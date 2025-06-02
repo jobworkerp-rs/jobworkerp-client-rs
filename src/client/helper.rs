@@ -337,6 +337,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_and_get_result_worker_job(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -364,6 +365,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .ok_or(anyhow!("result data not found"))
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_and_get_output_worker_job(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -403,6 +405,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_worker_job<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -452,6 +455,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .context("enqueue_worker_job")
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_stream_worker_job<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -569,6 +573,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn setup_worker_and_enqueue_with_raw_output(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -699,6 +704,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn setup_worker_and_enqueue(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -756,6 +762,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn setup_worker_and_enqueue_with_json(
         &self,
         cx: Option<&opentelemetry::Context>,
