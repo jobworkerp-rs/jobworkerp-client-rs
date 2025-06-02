@@ -218,24 +218,19 @@ impl JobworkerpProto {
         result_data: &JobResultData,
     ) -> Result<serde_json::Value> {
         let output_text: serde_json::Value = match result_data.output.as_ref() {
-            Some(output) if !output.items.is_empty() && !output.items[0].is_empty() => {
+            Some(output) if !output.items.is_empty() => {
                 let result_proto =
                     JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
                 if let Some(proto) = result_proto.as_ref() {
                     let mut output_array = Vec::new();
-                    for item in output.items.iter() {
-                        if item.is_empty() {
-                            continue;
-                        }
+                    let item = output.items.as_slice();
+                    if !item.is_empty() {
                         tracing::debug!(
                             "protobuf decode item: {}, worker: {}",
                             item.len(),
                             worker_name
                         );
-                        match ProtobufDescriptor::get_message_from_bytes(
-                            proto.clone(),
-                            item.as_slice(),
-                        ) {
+                        match ProtobufDescriptor::get_message_from_bytes(proto.clone(), item) {
                             Ok(mes) => {
                                 // using result for warning only
                                 let _ = ProtobufDescriptor::message_to_json_value(&mes)
@@ -258,16 +253,9 @@ impl JobworkerpProto {
                     } else {
                         serde_json::Value::Array(output_array)
                     }
-                } else if !output.items.is_empty() && !output.items[0].is_empty() {
+                } else if !output.items.is_empty() {
                     tracing::debug!("empty proto (means raw bytes): worker={}", worker_name);
-                    serde_json::Value::String(
-                        output
-                            .items
-                            .iter()
-                            .map(|s| String::from_utf8_lossy(s).into_owned())
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    )
+                    serde_json::Value::String(String::from_utf8_lossy(&output.items).into_owned())
                 } else {
                     tracing::debug!("empty proto, empty item: worker={}", worker_name);
                     serde_json::Value::Null
@@ -284,15 +272,18 @@ impl JobworkerpProto {
         result_data: &JobResultData,
     ) -> Result<String> {
         let output_text: String = match result_data.output.as_ref() {
-            Some(output) if !output.items.is_empty() && !output.items[0].is_empty() => {
+            Some(output) if !output.items.is_empty() => {
                 let result_proto =
                     JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
                 if let Some(proto) = result_proto.as_ref() {
                     let mut output_text = "".to_string();
-                    for item in output.items.iter() {
-                        if item.is_empty() {
-                            continue;
-                        }
+                    let item = output.items.clone();
+                    if !item.is_empty() {
+                        tracing::debug!(
+                            "protobuf decode item: {}, worker: {}",
+                            output.items.len(),
+                            worker_name
+                        );
                         tracing::debug!(
                             "protobuf decode item: {}, worker: {}",
                             item.len(),
@@ -313,25 +304,15 @@ impl JobworkerpProto {
                         }
                     }
                     output_text
-                } else if !output.items.is_empty() && !output.items[0].is_empty() {
+                } else if !output.items.is_empty() {
                     tracing::debug!("empty proto (means raw bytes): worker={}", worker_name);
-                    output
-                        .items
-                        .iter()
-                        .map(|s| String::from_utf8_lossy(s).into_owned())
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    String::from_utf8_lossy(&output.items).into_owned()
                 } else {
                     tracing::debug!("empty proto, empty item: worker={}", worker_name);
                     "".to_string()
                 }
             }
-            Some(output) => output
-                .items
-                .iter()
-                .map(|s| String::from_utf8_lossy(s))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            Some(output) => String::from_utf8_lossy(&output.items.as_slice()).into_owned(),
             None => "".to_string(),
         };
         Ok(output_text)

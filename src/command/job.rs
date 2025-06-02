@@ -407,6 +407,7 @@ impl JobCommand {
             if let jobworkerp::data::Job {
                 id: Some(jid),
                 data: Some(jdat),
+                metadata: _,
             } = job
             {
                 println!("[job]:\n\t[id] {}", &jid.value);
