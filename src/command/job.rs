@@ -320,7 +320,7 @@ impl JobCommand {
                             metadata.clone(),
                             &worker_data,
                             args,
-                            timeout.map(|t| (t / 1000) as u32).unwrap_or(600),
+                            timeout.map(|t| (t / 1000) as u32).unwrap_or(3600),
                             *run_after_time,
                             priority.clone().map(|p| p.to_grpc()),
                         )
