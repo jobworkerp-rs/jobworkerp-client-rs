@@ -259,9 +259,10 @@ impl WorkerCommand {
                     .find_list(
                         to_request(
                             metadata,
-                            jobworkerp::service::FindListRequest {
+                            jobworkerp::service::FindWorkerListRequest {
                                 offset: *offset,
                                 limit: *limit,
+                                ..Default::default()
                             },
                         )
                         .unwrap(),
