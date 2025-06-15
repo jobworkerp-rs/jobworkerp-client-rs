@@ -7,7 +7,7 @@ use crate::jobworkerp::data::{
 use crate::jobworkerp::function::data::FunctionSpecs;
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
 use crate::jobworkerp::service::{
-    CreateJobResponse, FindListRequest, JobRequest, WorkerNameRequest,
+    CreateJobResponse, JobRequest, WorkerNameRequest, RunnerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
@@ -128,30 +128,30 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 "jobworkerp-client",
                 "find_runner_by_name",
                 "find_list",
-                tonic::Request::new(FindListRequest {
-                    limit: None,
-                    offset: None,
+                tonic::Request::new(RunnerNameRequest {
+                    name: name_owned.clone(),
                 }),
                 move |request| async move {
                     // TODO memory cache
                     let mut runner_client = client_clone.runner_client().await;
                     // TODO find by name
-                    let mut stream = runner_client
-                        .find_list(to_request(&metadata, request)?)
+                    let res = runner_client
+                        .find_by_name(to_request(&metadata, request)?)
                         .await
                         .map_err(|e| anyhow!(e))?
                         .into_inner();
-                    while let Some(item) = stream.next().await {
-                        match item {
-                            Ok(item) => {
-                                if item.data.as_ref().is_some_and(|d| d.name == name_owned) {
-                                    return Ok(Some(item));
-                                }
-                            }
-                            Err(e) => return Err(anyhow!(e)),
-                        }
-                    }
-                    Ok(None)
+                    Ok(res.data)
+                    // while let Some(item) = stream.next().await {
+                    //     match item {
+                    //         Ok(item) => {
+                    //             if item.data.as_ref().is_some_and(|d| d.name == name_owned) {
+                    //                 return Ok(Some(item));
+                    //             }
+                    //         }
+                    //         Err(e) => return Err(anyhow!(e)),
+                    //     }
+                    // }
+                    // Ok(None)
                 },
             )
             .await
