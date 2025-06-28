@@ -299,7 +299,7 @@ impl JobworkerpProto {
                                         .as_str();
                             }
                             Err(e) => {
-                                output_text += format!("protobuf decode error: {:#?}", e).as_str();
+                                output_text += format!("protobuf decode error: {e:#?}").as_str();
                             }
                         }
                     }
