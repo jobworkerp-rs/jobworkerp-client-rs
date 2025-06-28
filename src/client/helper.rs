@@ -7,7 +7,7 @@ use crate::jobworkerp::data::{
 use crate::jobworkerp::function::data::FunctionSpecs;
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
 use crate::jobworkerp::service::{
-    CreateJobResponse, JobRequest, WorkerNameRequest, RunnerNameRequest,
+    CreateJobResponse, JobRequest, RunnerNameRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{anyhow, Context, Result};
@@ -828,11 +828,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 )
                 .await
             } else {
-                Err(crate::error::ClientError::NotFound(format!(
-                    "Not found runner: {}",
-                    runner_name
-                ))
-                .into())
+                Err(
+                    crate::error::ClientError::NotFound(format!("Not found runner: {runner_name}"))
+                        .into(),
+                )
             }
         }
     }
