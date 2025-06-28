@@ -177,7 +177,7 @@ impl JobCommand {
                 if let Some(result) = response.result {
                     JobResultCommand::print_job_result(&result, result_desc);
                 } else {
-                    println!("{:#?}", response);
+                    println!("{response:#?}");
                 }
             }
             JobCommand::EnqueueForStream {
@@ -326,7 +326,7 @@ impl JobCommand {
                         )
                         .await
                         .inspect_err(|e| {
-                            println!("enqueue_stream_worker_job error: {:#?}", e);
+                            println!("enqueue_stream_worker_job error: {e:#?}");
                         })
                         .unwrap();
                     let _ = helper
@@ -351,7 +351,7 @@ impl JobCommand {
                     let trailers = response.trailers().await.unwrap().unwrap_or_default();
                     if !trailers.is_empty() {
                         let meta = trailers.get_all(JOB_RESULT_HEADER_NAME);
-                        println!("meta: {:#?}", meta);
+                        println!("meta: {meta:#?}");
                     }
                 } else {
                     println!(
@@ -380,7 +380,7 @@ impl JobCommand {
                 let response = client.job_client().await.find_list(request).await.unwrap();
                 let meta = response.metadata().clone();
                 let mut inner = response.into_inner();
-                println!("{:#?}", meta);
+                println!("{meta:#?}");
                 while let Some(data) = inner.message().await.unwrap() {
                     print_job_with_request(client, data).await.unwrap();
                 }
@@ -388,7 +388,7 @@ impl JobCommand {
             JobCommand::Delete { id } => {
                 let id = JobId { value: *id };
                 let response = client.job_client().await.delete(id).await.unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             JobCommand::Count {} => {
                 let response = client
@@ -397,7 +397,7 @@ impl JobCommand {
                     .count(CountCondition {}) // TODO
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
         }
         async fn print_job_with_request(
@@ -434,7 +434,7 @@ impl JobCommand {
                             }
                         }
                         Err(e) => {
-                            println!("\t[args (ERROR)]  {:?}", e);
+                            println!("\t[args (ERROR)]  {e:?}");
                         }
                     }
                     println!("\t[uniq_key] {:?}", &jdat.uniq_key);

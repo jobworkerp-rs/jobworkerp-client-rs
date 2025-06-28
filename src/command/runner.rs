@@ -65,7 +65,7 @@ impl RunnerCommand {
                 let definition = if definition.starts_with("@") {
                     let path = definition.trim_start_matches('@');
                     std::fs::read_to_string(path).unwrap_or_else(|_| {
-                        panic!("Failed to read file: {}", path);
+                        panic!("Failed to read file: {path}");
                     })
                 } else {
                     definition.clone()
@@ -86,7 +86,7 @@ impl RunnerCommand {
                     .create(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             RunnerCommand::Find { id } => {
                 let id = RunnerId { value: *id };
@@ -144,7 +144,7 @@ impl RunnerCommand {
             RunnerCommand::Delete { id } => {
                 let id = RunnerId { value: *id };
                 let response = client.runner_client().await.delete(id).await.unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             RunnerCommand::Count {} => {
                 let response = client
