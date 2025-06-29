@@ -201,7 +201,7 @@ impl JobResultCommand {
                     .delete(to_request(metadata, id).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             JobResultCommand::Count {} => {
                 let response = client
@@ -210,7 +210,7 @@ impl JobResultCommand {
                     .count(to_request(metadata, CountCondition {}).unwrap()) // TODO
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
         }
     }
@@ -265,7 +265,7 @@ impl JobResultCommand {
                             ProtobufDescriptor::print_dynamic_message(&mes, false);
                         }
                         Err(e) => {
-                            println!("decode error: {:#?}", e);
+                            println!("decode error: {e:#?}");
                             println!(
                                 "original response as string: {:#?}",
                                 String::from_utf8_lossy(item)
@@ -294,7 +294,7 @@ impl JobResultCommand {
                     ProtobufDescriptor::print_dynamic_message(&mes, false);
                 }
                 Err(e) => {
-                    println!("error: {:#?}", e);
+                    println!("error: {e:#?}");
                 }
             }
         } else {
@@ -318,7 +318,7 @@ impl JobResultCommand {
                         Self::print_job_result(&res, result_proto.clone());
                         // println!("\t[result]: {:#?}", res);
                     } else {
-                        println!("\t{}: {:?}", key, value);
+                        println!("\t{key}: {value:?}");
                     }
                 }
             }

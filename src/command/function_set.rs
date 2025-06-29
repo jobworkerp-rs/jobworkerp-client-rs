@@ -95,7 +95,7 @@ impl FunctionSetCommand {
                     .create(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             FunctionSetCommand::Find { id } => {
                 let id = FunctionSetId { value: *id };
@@ -185,7 +185,7 @@ impl FunctionSetCommand {
                         .update(to_request(metadata, function_set).unwrap())
                         .await
                         .unwrap();
-                    println!("{:#?}", response);
+                    println!("{response:#?}");
                 } else {
                     println!("function set not found");
                 }
@@ -198,7 +198,7 @@ impl FunctionSetCommand {
                     .delete(to_request(metadata, id).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             FunctionSetCommand::Count {} => {
                 let response = client
@@ -210,7 +210,7 @@ impl FunctionSetCommand {
                     )
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
         }
     }
@@ -238,7 +238,7 @@ fn parse_targets(targets_json: &str) -> Vec<FunctionTarget> {
             let function_type = match type_value {
                 0 => FunctionType::Runner,
                 1 => FunctionType::Worker,
-                _ => panic!("Invalid function type: {}", type_value),
+                _ => panic!("Invalid function type: {type_value}"),
             };
 
             FunctionTarget {

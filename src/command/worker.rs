@@ -174,8 +174,7 @@ impl WorkerCommand {
                             JobworkerpProto::json_to_message(ope_desc, settings.as_str())
                                 .map_err(|e| {
                                     println!(
-                                        "failed to parse runner_settings json to message: {:?}",
-                                        e
+                                        "failed to parse runner_settings json to message: {e:?}"
                                     );
                                     exit(0x0100);
                                 })
@@ -186,7 +185,7 @@ impl WorkerCommand {
                             settings.as_bytes().to_vec()
                         }
                         Err(e) => {
-                            println!("failed to find runner: {:?}", e);
+                            println!("failed to find runner: {e:?}");
                             exit(0x0100);
                         }
                     };
@@ -218,7 +217,7 @@ impl WorkerCommand {
                     .create(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             WorkerCommand::Find { id } => {
                 let id = WorkerId { value: *id };
@@ -259,9 +258,10 @@ impl WorkerCommand {
                     .find_list(
                         to_request(
                             metadata,
-                            jobworkerp::service::FindListRequest {
+                            jobworkerp::service::FindWorkerListRequest {
                                 offset: *offset,
                                 limit: *limit,
+                                ..Default::default()
                             },
                         )
                         .unwrap(),
@@ -345,7 +345,7 @@ impl WorkerCommand {
                         )
                         .await
                         .unwrap();
-                    println!("{:#?}", response);
+                    println!("{response:#?}");
                 } else {
                     println!("worker not found");
                 }
@@ -358,7 +358,7 @@ impl WorkerCommand {
                     .delete(to_request(metadata, id).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
             WorkerCommand::Count {} => {
                 let response = client
@@ -367,7 +367,7 @@ impl WorkerCommand {
                     .count(to_request(metadata, CountCondition {}).unwrap())
                     .await
                     .unwrap();
-                println!("{:#?}", response);
+                println!("{response:#?}");
             }
         }
         async fn print_worker(
@@ -401,8 +401,7 @@ impl WorkerCommand {
                         }
                         Err(e) => {
                             println!(
-                                "\t[runner_settings (error)] failed to parse runner_settings message: {:?}",
-                                e
+                                "\t[runner_settings (error)] failed to parse runner_settings message: {e:?}"
                             );
                         }
                     }
