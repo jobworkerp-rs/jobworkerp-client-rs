@@ -345,7 +345,6 @@ impl JobCommand {
                             println!("enqueue_stream_worker_job error: {e:#?}");
                         })
                         .unwrap();
-                    // println!("====== META: {meta:#?}, response: {response:#?}");
                     let _ = helper
                         .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
                         .await;
@@ -367,8 +366,7 @@ impl JobCommand {
                         }
                     }
                     // Check for job result header in initial response metadata
-                    if let Some(result_bin) = meta.get(JOB_RESULT_HEADER_NAME) {
-                        println!("Job result header: {result_bin:#?}");
+                    if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
                         JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                     }
                     
