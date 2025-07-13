@@ -33,6 +33,7 @@ use infra_utils::infra::trace::Tracing;
 use opentelemetry::{global, trace::Span, Context};
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
+pub const JOB_ID_HEADER_NAME: &str = "x-job-id-bin";
 
 #[derive(Parser, Debug)]
 pub struct JobArg {
@@ -214,15 +215,30 @@ impl JobCommand {
 
                 let meta = response.metadata().clone();
                 let mut response = response.into_inner();
+                
+                // Check for job result header
+                if let Some(result_bin) = meta.get(JOB_RESULT_HEADER_NAME) {
+                    println!("Job result header found: {result_bin:#?}");
+                }
+                
                 // result meta header
                 JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                 // print streaming response
-                while let Some(item) = response.message().await.unwrap() {
-                    if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item {
-                        JobResultCommand::print_job_result_output(
-                            v.as_slice(),
-                            result_desc.clone(),
-                        );
+                while let Ok(Some(item)) = response.message().await {
+                    match &item.item {
+                        Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
+                            JobResultCommand::print_job_result_output(
+                                v.as_slice(),
+                                result_desc.clone(),
+                            );
+                        }
+                        Some(jobworkerp::data::result_output_item::Item::End(_)) => {
+                            println!("end of stream");
+                            break;
+                        }
+                        None => {
+                            println!("no item");
+                        }
                     }
                 }
                 // if let Some(result) = response.result {
@@ -314,7 +330,7 @@ impl JobCommand {
                             )
                         })
                         .unwrap();
-                    let mut response = helper
+                    let (meta, mut response) = helper
                         .enqueue_stream_worker_job(
                             cx.as_ref(),
                             metadata.clone(),
@@ -329,10 +345,11 @@ impl JobCommand {
                             println!("enqueue_stream_worker_job error: {e:#?}");
                         })
                         .unwrap();
+                    // println!("====== META: {meta:#?}, response: {response:#?}");
                     let _ = helper
                         .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
                         .await;
-                    while let Some(item) = response.message().await.unwrap() {
+                    while let Ok(Some(item)) = response.message().await {
                         match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
                                 JobResultCommand::print_job_result_output(
@@ -342,16 +359,34 @@ impl JobCommand {
                             }
                             Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                                 println!("end of stream");
+                                break;
                             }
                             None => {
                                 println!("no item");
                             }
                         }
                     }
-                    let trailers = response.trailers().await.unwrap().unwrap_or_default();
-                    if !trailers.is_empty() {
-                        let meta = trailers.get_all(JOB_RESULT_HEADER_NAME);
-                        println!("meta: {meta:#?}");
+                    // Check for job result header in initial response metadata
+                    if let Some(result_bin) = meta.get(JOB_RESULT_HEADER_NAME) {
+                        println!("Job result header: {result_bin:#?}");
+                        JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
+                    }
+                    
+                    // Also check trailers for completeness
+                    match response.trailers().await {
+                        Ok(Some(trailers)) => {
+                            if !trailers.is_empty() {
+                                if let Some(trailer_result) = trailers.get(JOB_RESULT_HEADER_NAME) {
+                                    println!("Job result trailer: {trailer_result:#?}");
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            println!("No trailers found");
+                        }
+                        Err(e) => {
+                            println!("Error reading trailers: {e}");
+                        }
                     }
                 } else {
                     println!(

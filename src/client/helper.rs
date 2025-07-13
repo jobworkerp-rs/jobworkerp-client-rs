@@ -466,7 +466,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         run_after_time: Option<i64>,
         priority: Option<Priority>,
     ) -> impl std::future::Future<
-        Output = Result<tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>>,
+        Output = Result<(tonic::metadata::MetadataMap, tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>)>,
     > + Send
            + 'a {
         async move {
@@ -496,13 +496,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 "enqueue_for_stream",
                 tonic_request,
                 move |req| async move {
-                    client_clone
+                    let response = client_clone
                         .job_client()
                         .await
                         .enqueue_for_stream(to_request(&metadata_clone, req)?)
                         .await
-                        .map(|r| r.into_inner())
-                        .map_err(|e| anyhow!(e))
+                        .map_err(|e| anyhow!(e))?;
+                    let metadata_map = response.metadata().clone();
+                    let streaming = response.into_inner();
+                    Ok((metadata_map, streaming))
                 },
             )
             .await
