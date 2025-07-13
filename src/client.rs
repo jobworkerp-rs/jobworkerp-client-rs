@@ -54,7 +54,9 @@ impl JobworkerpClient {
     }
     pub async fn job_client(&self) -> JobServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+        JobServiceClient::new(cell.clone())
+            .max_decoding_message_size(128 * 1024 * 1024)  // 128MB for large responses
+            .max_encoding_message_size(64 * 1024 * 1024)   // 64MB for large requests
     }
     pub async fn job_status_client(&self) -> JobStatusServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
