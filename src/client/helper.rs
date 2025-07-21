@@ -466,7 +466,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         run_after_time: Option<i64>,
         priority: Option<Priority>,
     ) -> impl std::future::Future<
-        Output = Result<(tonic::metadata::MetadataMap, tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>)>,
+        Output = Result<(
+            tonic::metadata::MetadataMap,
+            tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>,
+        )>,
     > + Send
            + 'a {
         async move {
