@@ -20,8 +20,8 @@ use crate::{
     command::{job_result::JobResultCommand, to_request},
     jobworkerp::{
         self,
-        data::{JobId, Priority, QueueType, ResponseType, Runner, RunnerType, WorkerData},
-        service::{job_request, CountCondition, FindListRequest, JobRequest},
+        data::{JobId, JobProcessingStatus, Priority, QueueType, ResponseType, Runner, RunnerType, WorkerData},
+        service::{job_request, CountCondition, FindListRequest, FindListWithProcessingStatusRequest, JobRequest},
     },
     proto::JobworkerpProto,
 };
@@ -103,6 +103,12 @@ pub enum JobCommand {
         id: i64,
     },
     Count {},
+    ListWithProcessingStatus {
+        #[clap(short, long)]
+        status: JobProcessingStatusArg,
+        #[clap(short, long)]
+        limit: Option<i32>,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -111,12 +117,33 @@ pub enum PriorityArg {
     Middle,
     Low,
 }
+
+#[derive(ValueEnum, Debug, Clone)]
+pub enum JobProcessingStatusArg {
+    Unknown,
+    Pending,
+    Running,
+    WaitResult,
+    Cancelling,
+}
 impl PriorityArg {
     pub fn to_grpc(&self) -> Priority {
         match self {
             PriorityArg::High => Priority::High,
             PriorityArg::Middle => Priority::Medium,
             PriorityArg::Low => Priority::Low,
+        }
+    }
+}
+
+impl JobProcessingStatusArg {
+    pub fn to_grpc(&self) -> JobProcessingStatus {
+        match self {
+            JobProcessingStatusArg::Unknown => JobProcessingStatus::Unknown,
+            JobProcessingStatusArg::Pending => JobProcessingStatus::Pending,
+            JobProcessingStatusArg::Running => JobProcessingStatus::Running,
+            JobProcessingStatusArg::WaitResult => JobProcessingStatus::WaitResult,
+            JobProcessingStatusArg::Cancelling => JobProcessingStatus::Cancelling,
         }
     }
 }
@@ -452,6 +479,30 @@ impl JobCommand {
                     .await
                     .unwrap();
                 println!("{response:#?}");
+            }
+            JobCommand::ListWithProcessingStatus { status, limit } => {
+                let request = FindListWithProcessingStatusRequest {
+                    status: status.to_grpc() as i32,
+                    limit: *limit,
+                };
+                let response = client
+                    .job_client()
+                    .await
+                    .find_list_with_processing_status(request)
+                    .await
+                    .unwrap();
+                let meta = response.metadata().clone();
+                let mut inner = response.into_inner();
+                println!("{meta:#?}");
+                while let Some(job_and_status) = inner.message().await.unwrap() {
+                    if let Some(job) = job_and_status.job {
+                        print_job_with_request(client, job).await.unwrap();
+                        if let Some(status_val) = job_and_status.status {
+                            let status_enum = JobProcessingStatus::try_from(status_val).unwrap_or(JobProcessingStatus::Unknown);
+                            println!("\t[processing_status] {:?}", status_enum.as_str_name());
+                        }
+                    }
+                }
             }
         }
         async fn print_job_with_request(
