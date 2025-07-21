@@ -25,13 +25,13 @@ use crate::{
     },
     proto::JobworkerpProto,
 };
-use prost::Message;
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 use infra_utils::infra::trace::Tracing;
 use opentelemetry::{global, trace::Span, Context};
+use prost::Message;
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
 pub const JOB_ID_HEADER_NAME: &str = "x-job-id-bin";
@@ -216,12 +216,12 @@ impl JobCommand {
 
                 let meta = response.metadata().clone();
                 let mut response = response.into_inner();
-                
+
                 // Check for job result header
                 if let Some(result_bin) = meta.get(JOB_RESULT_HEADER_NAME) {
                     println!("Job result header found: {result_bin:#?}");
                 }
-                
+
                 // result meta header
                 JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                 // print streaming response
@@ -352,16 +352,16 @@ impl JobCommand {
                     // Check for job result header in initial response metadata
                     if let Some(id_bin) = meta.get_bin(JOB_ID_HEADER_NAME) {
                         match JobId::decode(id_bin.to_bytes().unwrap().as_ref()) {
-                            Ok(job_id) => println!("Job ID header found: {:?}", job_id),
-                            Err(e) => println!("Failed to decode job ID: {}", e),
+                            Ok(job_id) => println!("Job ID header found: {job_id:?}"),
+                            Err(e) => println!("Failed to decode job ID: {e}"),
                         }
                     }
-                     // Check for job result header in initial response metadata
+                    // Check for job result header in initial response metadata
                     if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
                         println!("Job result initial response header found");
                         JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                     }
- 
+
                     while let Ok(Some(item)) = response.message().await {
                         match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
@@ -384,14 +384,19 @@ impl JobCommand {
                     //     println!("Job result header found in last response metadata");
                     //     JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                     // }
-                    
+
                     // Also check trailers for completeness
                     match response.trailers().await {
                         Ok(Some(trailers)) => {
                             if !trailers.is_empty() {
-                                if let Some(_trailer_result) = trailers.get_bin(JOB_RESULT_HEADER_NAME) {
+                                if let Some(_trailer_result) =
+                                    trailers.get_bin(JOB_RESULT_HEADER_NAME)
+                                {
                                     println!("Trailer job result header found");
-                                    JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
+                                    JobResultCommand::print_job_result_metadata(
+                                        &meta,
+                                        result_desc.clone(),
+                                    );
                                 }
                             }
                         }

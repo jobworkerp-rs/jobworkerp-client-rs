@@ -314,18 +314,16 @@ impl JobResultCommand {
                 KeyAndValueRef::Binary(ref key, ref value) => {
                     if key.as_str() == Self::RESULT_HEADER_NAME {
                         match value.to_bytes() {
-                            Ok(bytes) => {
-                                match JobResult::decode(bytes.as_ref()) {
-                                    Ok(res) => {
-                                        Self::print_job_result(&res, result_proto.clone());
-                                    }
-                                    Err(e) => {
-                                        println!("Failed to decode JobResult from header: {e:#?}");
-                                        println!("Raw bytes length: {}", bytes.len());
-                                        println!("Raw bytes (hex): {:02x?}", bytes.as_ref());
-                                    }
+                            Ok(bytes) => match JobResult::decode(bytes.as_ref()) {
+                                Ok(res) => {
+                                    Self::print_job_result(&res, result_proto.clone());
                                 }
-                            }
+                                Err(e) => {
+                                    println!("Failed to decode JobResult from header: {e:#?}");
+                                    println!("Raw bytes length: {}", bytes.len());
+                                    println!("Raw bytes (hex): {:02x?}", bytes.as_ref());
+                                }
+                            },
                             Err(e) => {
                                 println!("Failed to convert header value to bytes: {e:#?}");
                             }
