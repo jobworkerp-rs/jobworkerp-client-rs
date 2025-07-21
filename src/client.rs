@@ -9,7 +9,7 @@ use crate::jobworkerp::function::service::{
 use crate::jobworkerp::service::{
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
-    job_status_service_client::JobStatusServiceClient, runner_service_client::RunnerServiceClient,
+    job_processing_status_service_client::JobProcessingStatusServiceClient, runner_service_client::RunnerServiceClient,
     worker_service_client::WorkerServiceClient,
 };
 use anyhow::Result;
@@ -58,9 +58,9 @@ impl JobworkerpClient {
             .max_decoding_message_size(128 * 1024 * 1024) // 128MB for large responses
             .max_encoding_message_size(64 * 1024 * 1024) // 64MB for large requests
     }
-    pub async fn job_status_client(&self) -> JobStatusServiceClient<tonic::transport::Channel> {
+    pub async fn job_processing_status_client(&self) -> JobProcessingStatusServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobStatusServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+        JobProcessingStatusServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_restore_client(&self) -> JobRestoreServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
