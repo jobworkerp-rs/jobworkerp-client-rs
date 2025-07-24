@@ -15,6 +15,10 @@
 use crate::{
     client::helper::DEFAULT_RETRY_POLICY,
     command::to_request,
+    display::{
+        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+        JsonVisualizer, TableVisualizer,
+    },
     jobworkerp::{
         self,
         data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
@@ -26,6 +30,9 @@ use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
 use std::{collections::HashMap, process::exit};
+
+pub mod display;
+use display::worker_to_json;
 
 #[derive(Parser, Debug)]
 pub struct WorkerArg {
@@ -64,16 +71,28 @@ pub enum WorkerCommand {
     Find {
         #[clap(short, long)]
         id: i64,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     FindByName {
         #[clap(short, long)]
         name: String,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     List {
         #[clap(short, long)]
         offset: Option<i64>,
         #[clap(short, long)]
         limit: Option<i32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Update {
         #[clap(short, long)]
@@ -219,7 +238,7 @@ impl WorkerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            WorkerCommand::Find { id } => {
+            WorkerCommand::Find { id, format, no_truncate } => {
                 let id = WorkerId { value: *id };
                 let response = client
                     .worker_client()
@@ -230,12 +249,12 @@ impl WorkerCommand {
                     .into_inner()
                     .data;
                 if let Some(worker) = response {
-                    print_worker(client, worker).await.unwrap();
+                    print_worker_formatted(client, worker, format, *no_truncate).await.unwrap();
                 } else {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::FindByName { name } => {
+            WorkerCommand::FindByName { name, format, no_truncate } => {
                 let name = WorkerNameRequest { name: name.clone() };
                 let response = client
                     .worker_client()
@@ -246,12 +265,12 @@ impl WorkerCommand {
                     .into_inner()
                     .data;
                 if let Some(worker) = response {
-                    print_worker(client, worker).await.unwrap();
+                    print_worker_formatted(client, worker, format, *no_truncate).await.unwrap();
                 } else {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::List { offset, limit } => {
+            WorkerCommand::List { offset, limit, format, no_truncate } => {
                 let response = client
                     .worker_client()
                     .await
@@ -268,15 +287,54 @@ impl WorkerCommand {
                     )
                     .await
                     .unwrap();
-                println!("meta: {:#?}", response.metadata());
+
                 let mut data = response.into_inner();
+                
+                // Collect all workers into a vector for batch processing
+                let mut workers = Vec::new();
                 while let Some(worker) = data.message().await.unwrap() {
-                    print_worker(client, worker).await.unwrap();
+                    // Get settings descriptor for proper display
+                    let settings_descriptor = if let Some(wdata) = &worker.data {
+                        if let Some(runner_id) = &wdata.runner_id {
+                            JobworkerpProto::find_worker_runner_settings_descriptors(
+                                client,
+                                runner_id.clone(),
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let worker_json = worker_to_json(&worker, settings_descriptor, format);
+                    workers.push(worker_json);
                 }
-                println!(
-                    "trailers: {:#?}",
-                    data.trailers().await.unwrap().unwrap_or_default()
-                );
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&workers, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&workers, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&workers, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
             WorkerCommand::Update {
                 id,
@@ -370,6 +428,56 @@ impl WorkerCommand {
                 println!("{response:#?}");
             }
         }
+        async fn print_worker_formatted(
+            client: &crate::client::JobworkerpClient,
+            worker: jobworkerp::data::Worker,
+            format: &crate::display::DisplayFormat,
+            no_truncate: bool,
+        ) -> Result<()> {
+            // Get settings descriptor for proper display
+            let settings_descriptor = if let Some(wdata) = &worker.data {
+                if let Some(runner_id) = &wdata.runner_id {
+                    JobworkerpProto::find_worker_runner_settings_descriptors(
+                        client,
+                        runner_id.clone(),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let worker_json = worker_to_json(&worker, settings_descriptor, format);
+            let workers = vec![worker_json];
+
+            // Display using the appropriate visualizer
+            let options = DisplayOptions::new(format.clone())
+                .with_color(supports_color())
+                .with_no_truncate(no_truncate);
+
+            let output = match format {
+                crate::display::DisplayFormat::Table => {
+                    let visualizer = TableVisualizer;
+                    visualizer.visualize(&workers, &options)
+                }
+                crate::display::DisplayFormat::Card => {
+                    let visualizer = CardVisualizer;
+                    visualizer.visualize(&workers, &options)
+                }
+                crate::display::DisplayFormat::Json => {
+                    let visualizer = JsonPrettyVisualizer;
+                    visualizer.visualize(&workers, &options)
+                }
+            };
+
+            println!("{}", output);
+            Ok(())
+        }
+
         async fn print_worker(
             client: &crate::client::JobworkerpClient,
             worker: jobworkerp::data::Worker,

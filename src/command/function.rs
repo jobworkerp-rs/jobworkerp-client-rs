@@ -17,6 +17,8 @@ use crate::{
 };
 use clap::Parser;
 
+pub mod display;
+
 #[derive(Parser, Debug)]
 pub struct FunctionArg {
     #[clap(subcommand)]
@@ -30,10 +32,18 @@ pub enum FunctionCommand {
         exclude_runner: bool,
         #[clap(long)]
         exclude_worker: bool,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     ListBySet {
         #[clap(short, long)]
         name: String,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Call {
         // Function name - either runner or worker
@@ -82,28 +92,66 @@ impl FunctionCommand {
             FunctionCommand::List {
                 exclude_runner,
                 exclude_worker,
+                format,
+                no_truncate,
             } => {
                 let request = FindFunctionRequest {
                     exclude_runner: *exclude_runner,
                     exclude_worker: *exclude_worker,
                 };
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::function_to_json;
+
                 let response = client
                     .function_client()
                     .await
                     .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
+                    
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
+                
+                // Collect all functions into a vector for batch processing
+                let mut functions_json = Vec::new();
                 while let Some(function) = data.message().await.unwrap() {
-                    Self::print_function(&function);
+                    let function_json = function_to_json(&function, format);
+                    functions_json.push(function_json);
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                };
+
+                println!("{}", output);
+                
                 println!(
                     "trailer: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionCommand::ListBySet { name } => {
+            FunctionCommand::ListBySet { name, format, no_truncate } => {
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::function_to_json;
+
                 let request = FindFunctionSetRequest { name: name.clone() };
                 let response = client
                     .function_client()
@@ -111,11 +159,39 @@ impl FunctionCommand {
                     .find_list_by_set(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
+                    
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
+                
+                // Collect all functions into a vector for batch processing
+                let mut functions_json = Vec::new();
                 while let Some(function) = data.message().await.unwrap() {
-                    Self::print_function(&function);
+                    let function_json = function_to_json(&function, format);
+                    functions_json.push(function_json);
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&functions_json, &options)
+                    }
+                };
+
+                println!("{}", output);
+                
                 println!(
                     "trailer: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()
@@ -204,7 +280,7 @@ impl FunctionCommand {
                 println!("meta: {:#?}", response.metadata());
                 let mut result_stream = response.into_inner();
 
-                // Process streaming results
+                // Process streaming results with improved formatting
                 while let Some(function_result) = result_stream.message().await.unwrap() {
                     Self::print_function_result(&function_result);
                 }
