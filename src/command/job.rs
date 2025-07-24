@@ -39,7 +39,7 @@ use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
-use infra_utils::infra::trace::Tracing;
+use net_utils::trace::Tracing;
 use opentelemetry::{global, trace::Span, Context};
 use prost::Message;
 
@@ -238,10 +238,17 @@ impl JobCommand {
                         println!("Job enqueued successfully - Result ID: {}", rid.value);
                     }
                     if let Some(data) = &result.data {
-                        println!("Worker: {} | Status: {}", data.worker_name, data.status().as_str_name());
+                        println!(
+                            "Worker: {} | Status: {}",
+                            data.worker_name,
+                            data.status().as_str_name()
+                        );
                         if let Some(output) = &data.output {
                             if !output.items.is_empty() {
-                                JobResultCommand::print_job_result_output(&output.items, result_desc);
+                                JobResultCommand::print_job_result_output(
+                                    &output.items,
+                                    result_desc,
+                                );
                             }
                         }
                     }
