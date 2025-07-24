@@ -8,12 +8,13 @@ use crate::jobworkerp::service::{
     CountCondition, FindListRequest, ListenByWorkerRequest, ListenRequest,
 };
 use crate::proto::JobworkerpProto;
-use chrono::DateTime;
 use clap::Parser;
 use command_utils::protobuf::ProtobufDescriptor;
 use prost::Message;
 use prost_reflect::MessageDescriptor;
 use tonic::metadata::KeyAndValueRef;
+
+pub mod display;
 
 #[derive(Parser, Debug)]
 pub struct JobResultArg {
@@ -26,6 +27,10 @@ pub enum JobResultCommand {
     Find {
         #[clap(short, long)]
         id: i64,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Listen {
         #[clap(short, long)]
@@ -34,6 +39,10 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     ListenStream {
         #[clap(short, long)]
@@ -42,20 +51,36 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     ListenByWorker {
         #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
         worker: WorkerIdOrName,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     List {
         #[clap(short, long)]
         offset: Option<i64>,
         #[clap(short, long)]
         limit: Option<i32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     ListByJobId {
         #[clap(short, long)]
         job_id: i64,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Delete {
         #[clap(short, long)]
@@ -72,7 +97,7 @@ impl JobResultCommand {
         metadata: &HashMap<String, String>,
     ) {
         match self {
-            JobResultCommand::Find { id } => {
+            JobResultCommand::Find { id, format, no_truncate } => {
                 let id = JobResultId { value: *id };
                 let response = client
                     .job_result_client()
@@ -82,7 +107,7 @@ impl JobResultCommand {
                     .unwrap();
                 match response.into_inner().data {
                     Some(job_res) => {
-                        Self::print_job_result_with_request(client, job_res).await;
+                        Self::print_job_result_formatted(client, job_res, format, *no_truncate).await;
                     }
                     None => {
                         println!("job result not found: id = {}", id.value);
@@ -93,6 +118,8 @@ impl JobResultCommand {
                 job_id,
                 worker,
                 timeout,
+                format,
+                no_truncate,
             } => {
                 let req = ListenRequest {
                     job_id: Some(JobId { value: *job_id }),
@@ -106,12 +133,14 @@ impl JobResultCommand {
                     .await
                     .unwrap()
                     .into_inner();
-                Self::print_job_result_with_request(client, response).await;
+                Self::print_job_result_formatted(client, response, format, *no_truncate).await;
             }
             JobResultCommand::ListenStream {
                 job_id,
                 worker,
                 timeout,
+                format,
+                no_truncate,
             } => {
                 let req = worker.to_job_worker();
                 let (_, _args_desc, result_desc) =
@@ -133,20 +162,42 @@ impl JobResultCommand {
 
                 let meta = response.metadata().clone();
                 let mut response = response.into_inner();
+                
+                // Create display options
+                let display_options = crate::display::DisplayOptions {
+                    format: format.clone(),
+                    color_enabled: true,
+                    max_field_length: None,
+                    use_unicode: true,
+                    no_truncate: *no_truncate,
+                };
+
                 // result meta header
                 JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
-                // print streaming response
+                
+                // Start streaming session
+                JobResultCommand::start_streaming_session("job result", format, &display_options);
+                
+                // print streaming response with improved formatting
+                let mut item_count = 0;
                 while let Some(item) = response.message().await.unwrap() {
                     if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item {
-                        JobResultCommand::print_job_result_output(
+                        JobResultCommand::print_streaming_output(
                             v.as_slice(),
                             result_desc.clone(),
+                            format,
+                            &display_options,
+                            item_count,
                         );
+                        item_count += 1;
                     }
                 }
+                
+                // End streaming session
+                JobResultCommand::end_streaming_session(item_count, format, &display_options);
                 // Self::print_job_result_with_request(client, response).await;
             }
-            JobResultCommand::ListenByWorker { worker } => {
+            JobResultCommand::ListenByWorker { worker, format, no_truncate } => {
                 let req = ListenByWorkerRequest {
                     worker: Some(worker.to_listen_stream_worker()),
                 };
@@ -159,10 +210,14 @@ impl JobResultCommand {
                     .into_inner();
                 println!("listening... (Ctrl+C to stop)");
                 while let Some(res) = response.message().await.unwrap() {
-                    Self::print_job_result_with_request(client, res).await;
+                    Self::print_job_result_formatted(client, res, format, *no_truncate).await;
                 }
             }
-            JobResultCommand::List { offset, limit } => {
+            JobResultCommand::List { offset, limit, format, no_truncate } => {
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::job_result_to_json;
+
                 let request = FindListRequest {
                     offset: *offset,
                     limit: *limit,
@@ -174,11 +229,47 @@ impl JobResultCommand {
                     .await
                     .unwrap();
                 let mut response = response.into_inner();
+                
+                // Collect all job results into a vector for batch processing
+                let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    Self::print_job_result_with_request(client, job_res).await;
+                    let worker_name = job_res
+                        .data
+                        .as_ref()
+                        .map(|d| d.worker_name.as_str())
+                        .unwrap_or("");
+                    let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                    let job_result_json = job_result_to_json(&job_res, result_proto, format);
+                    job_results_json.push(job_result_json);
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
-            JobResultCommand::ListByJobId { job_id } => {
+            JobResultCommand::ListByJobId { job_id, format, no_truncate } => {
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::job_result_to_json;
+
                 let request = jobworkerp::service::FindListByJobIdRequest {
                     job_id: Some(JobId { value: *job_id }),
                 };
@@ -189,9 +280,41 @@ impl JobResultCommand {
                     .await
                     .unwrap()
                     .into_inner();
+                
+                // Collect all job results into a vector for batch processing
+                let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    Self::print_job_result_with_request(client, job_res).await;
+                    let worker_name = job_res
+                        .data
+                        .as_ref()
+                        .map(|d| d.worker_name.as_str())
+                        .unwrap_or("");
+                    let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                    let job_result_json = job_result_to_json(&job_res, result_proto, format);
+                    job_results_json.push(job_result_json);
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&job_results_json, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
             JobResultCommand::Delete { id } => {
                 let id = JobResultId { value: *id };
@@ -214,78 +337,51 @@ impl JobResultCommand {
             }
         }
     }
-    async fn print_job_result_with_request(
+    /// Print job result with new format system
+    async fn print_job_result_formatted(
         client: &crate::client::JobworkerpClient,
         job_result: jobworkerp::data::JobResult,
+        format: &crate::display::DisplayFormat,
+        no_truncate: bool,
     ) {
+        use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+            JsonVisualizer, TableVisualizer};
+        use self::display::job_result_to_json;
+
         let worker_name = job_result
             .data
             .as_ref()
             .map(|d| d.worker_name.as_str())
             .unwrap_or("");
         let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
-        Self::print_job_result(&job_result, result_proto);
-    }
-    pub fn print_job_result(
-        job_result: &jobworkerp::data::JobResult,
-        result_proto: Option<MessageDescriptor>,
-    ) {
-        if let jobworkerp::data::JobResult {
-            id: Some(rid),
-            data: Some(rdata),
-            metadata: _,
-        } = job_result
-        {
-            println!("[job_result]:\n\t[id] {}", &rid.value);
-            println!("\t[worker]: {}", &rdata.worker_name);
-            println!(
-                "\t[job id]: {}",
-                &rdata.job_id.map(|j| j.value).unwrap_or_default()
-            );
-            println!("\t[status]: {}", &rdata.status().as_str_name());
-            println!(
-                "\t[start-end]: {} - {}",
-                DateTime::from_timestamp_millis(rdata.start_time)
-                    .map(|d| d.to_string())
-                    .unwrap_or_default(),
-                DateTime::from_timestamp_millis(rdata.end_time)
-                    .map(|d| d.to_string())
-                    .unwrap_or_default()
-            );
-            if rdata.output.is_none() {
-                println!("\t[output]: None");
-                return;
+
+        // Convert to JSON with proper formatting
+        let job_result_json = job_result_to_json(&job_result, result_proto, format);
+        let job_results = vec![job_result_json];
+
+        // Display using the appropriate visualizer
+        let options = DisplayOptions::new(format.clone())
+            .with_color(supports_color())
+            .with_no_truncate(no_truncate);
+
+        let output = match format {
+            crate::display::DisplayFormat::Table => {
+                let visualizer = TableVisualizer;
+                visualizer.visualize(&job_results, &options)
             }
-            let output = rdata.output.as_ref().unwrap();
-            if let Some(proto) = result_proto.as_ref() {
-                let item = output.items.as_slice();
-                if !item.is_empty() {
-                    match ProtobufDescriptor::get_message_from_bytes(proto.clone(), item) {
-                        Ok(mes) => {
-                            ProtobufDescriptor::print_dynamic_message(&mes, false);
-                        }
-                        Err(e) => {
-                            println!("decode error: {e:#?}");
-                            println!(
-                                "original response as string: {:#?}",
-                                String::from_utf8_lossy(item)
-                            );
-                        }
-                    }
-                }
-            } else if !output.items.is_empty() {
-                println!(
-                    "\t[output]: |\n {}",
-                    String::from_utf8_lossy(output.items.as_slice())
-                );
+            crate::display::DisplayFormat::Card => {
+                let visualizer = CardVisualizer;
+                visualizer.visualize(&job_results, &options)
             }
-            // flush stdout
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
-        }
-        // .unwrap_or_else(|| {
-        //     println!("result: None: {:#?}", &job_result.id);
-        // });
+            crate::display::DisplayFormat::Json => {
+                let visualizer = JsonPrettyVisualizer;
+                visualizer.visualize(&job_results, &options)
+            }
+        };
+
+        println!("{}", output);
     }
+
 
     pub fn print_job_result_output(data: &[u8], result_proto: Option<MessageDescriptor>) {
         if let Some(proto) = result_proto {
@@ -303,7 +399,7 @@ impl JobResultCommand {
     }
     pub fn print_job_result_metadata(
         metadata: &tonic::metadata::MetadataMap,
-        result_proto: Option<MessageDescriptor>,
+        _result_proto: Option<MessageDescriptor>,
     ) {
         println!("[metadata]:");
         for kv in metadata.iter() {
@@ -316,7 +412,16 @@ impl JobResultCommand {
                         match value.to_bytes() {
                             Ok(bytes) => match JobResult::decode(bytes.as_ref()) {
                                 Ok(res) => {
-                                    Self::print_job_result(&res, result_proto.clone());
+                                    // Use the legacy output for metadata context
+                                    println!("[job_result] (from metadata header):");
+                                    if let Some(rid) = &res.id {
+                                        println!("\t[id] {}", rid.value);
+                                    }
+                                    if let Some(data) = &res.data {
+                                        println!("\t[worker]: {}", data.worker_name);
+                                        println!("\t[job id]: {}", data.job_id.map(|j| j.value).unwrap_or_default());
+                                        println!("\t[status]: {}", data.status().as_str_name());
+                                    }
                                 }
                                 Err(e) => {
                                     println!("Failed to decode JobResult from header: {e:#?}");
@@ -332,6 +437,87 @@ impl JobResultCommand {
                         println!("\t{key}: {value:?}");
                     }
                 }
+            }
+        }
+    }
+
+    /// Print streaming output with improved formatting based on display options
+    pub fn print_streaming_output(
+        data: &[u8], 
+        result_descriptor: Option<MessageDescriptor>,
+        format: &crate::display::DisplayFormat,
+        options: &crate::display::DisplayOptions,
+        item_index: usize
+    ) {
+        use crate::display::visualizer::{StreamingVisualizer, StreamingTableVisualizer, StreamingCardVisualizer};
+        use crate::command::job_result::display::streaming_output_to_json;
+
+        // Convert streaming data to JSON
+        let json_item = streaming_output_to_json(data, result_descriptor, format);
+
+        // Use appropriate streaming visualizer
+        match format {
+            crate::display::DisplayFormat::Table => {
+                // For table format, we collect items in a static visualizer
+                static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> = std::sync::OnceLock::new();
+                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                visualizer.render_item(&json_item, item_index, options);
+            }
+            crate::display::DisplayFormat::Card => {
+                let visualizer = StreamingCardVisualizer;
+                visualizer.render_item(&json_item, item_index, options);
+            }
+            crate::display::DisplayFormat::Json => {
+                // For JSON, we just print the item directly
+                println!("{}", serde_json::to_string_pretty(&json_item).unwrap_or_else(|_| json_item.to_string()));
+            }
+        }
+    }
+
+    /// Start streaming session with appropriate visualizer
+    pub fn start_streaming_session(
+        stream_type: &str,
+        format: &crate::display::DisplayFormat,
+        options: &crate::display::DisplayOptions
+    ) {
+        use crate::display::visualizer::{StreamingVisualizer, StreamingTableVisualizer, StreamingCardVisualizer};
+
+        match format {
+            crate::display::DisplayFormat::Table => {
+                static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> = std::sync::OnceLock::new();
+                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                visualizer.start_stream(stream_type, options);
+            }
+            crate::display::DisplayFormat::Card => {
+                let visualizer = StreamingCardVisualizer;
+                visualizer.start_stream(stream_type, options);
+            }
+            crate::display::DisplayFormat::Json => {
+                // JSON streaming doesn't need start message
+            }
+        }
+    }
+
+    /// End streaming session with appropriate visualizer
+    pub fn end_streaming_session(
+        total_count: usize,
+        format: &crate::display::DisplayFormat,
+        options: &crate::display::DisplayOptions
+    ) {
+        use crate::display::visualizer::{StreamingVisualizer, StreamingTableVisualizer, StreamingCardVisualizer};
+
+        match format {
+            crate::display::DisplayFormat::Table => {
+                static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> = std::sync::OnceLock::new();
+                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                visualizer.end_stream(total_count, options);
+            }
+            crate::display::DisplayFormat::Card => {
+                let visualizer = StreamingCardVisualizer;
+                visualizer.end_stream(total_count, options);
+            }
+            crate::display::DisplayFormat::Json => {
+                // JSON streaming doesn't need end message
             }
         }
     }

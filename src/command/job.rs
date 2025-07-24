@@ -18,10 +18,20 @@ use super::WorkerIdOrName;
 use crate::{
     client::{helper::UseJobworkerpClientHelper, UseJobworkerpClient},
     command::{job_result::JobResultCommand, to_request},
+    display::{
+        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+        JsonVisualizer, TableVisualizer,
+    },
     jobworkerp::{
         self,
-        data::{JobId, JobProcessingStatus, Priority, QueueType, ResponseType, Runner, RunnerType, WorkerData},
-        service::{job_request, CountCondition, FindListRequest, FindListWithProcessingStatusRequest, JobRequest},
+        data::{
+            JobId, JobProcessingStatus, Priority, QueueType, ResponseType, Runner, RunnerType,
+            WorkerData,
+        },
+        service::{
+            job_request, CountCondition, FindListRequest, FindListWithProcessingStatusRequest,
+            JobRequest,
+        },
     },
     proto::JobworkerpProto,
 };
@@ -35,6 +45,9 @@ use prost::Message;
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
 pub const JOB_ID_HEADER_NAME: &str = "x-job-id-bin";
+
+pub mod display;
+use display::job_to_json;
 
 #[derive(Parser, Debug)]
 pub struct JobArg {
@@ -71,6 +84,10 @@ pub enum JobCommand {
         priority: Option<PriorityArg>,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     EnqueueWorkflow {
         #[clap(short, long)]
@@ -87,6 +104,10 @@ pub enum JobCommand {
         timeout: Option<u64>,
         #[clap(short, long)]
         workflow_file: String,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Find {
         #[clap(short, long)]
@@ -97,6 +118,10 @@ pub enum JobCommand {
         offset: Option<i64>,
         #[clap(short, long)]
         limit: Option<u32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Delete {
         #[clap(short, long)]
@@ -108,6 +133,10 @@ pub enum JobCommand {
         status: JobProcessingStatusArg,
         #[clap(short, long)]
         limit: Option<i32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
 }
 
@@ -204,7 +233,18 @@ impl JobCommand {
                     .unwrap()
                     .into_inner();
                 if let Some(result) = response.result {
-                    JobResultCommand::print_job_result(&result, result_desc);
+                    // Use simplified output for job result
+                    if let Some(rid) = &result.id {
+                        println!("Job enqueued successfully - Result ID: {}", rid.value);
+                    }
+                    if let Some(data) = &result.data {
+                        println!("Worker: {} | Status: {}", data.worker_name, data.status().as_str_name());
+                        if let Some(output) = &data.output {
+                            if !output.items.is_empty() {
+                                JobResultCommand::print_job_result_output(&output.items, result_desc);
+                            }
+                        }
+                    }
                 } else {
                     println!("{response:#?}");
                 }
@@ -216,6 +256,8 @@ impl JobCommand {
                 run_after_time,
                 priority,
                 timeout,
+                format,
+                no_truncate,
             } => {
                 let req = worker.to_job_worker();
                 let (_, args_desc, result_desc) =
@@ -249,26 +291,50 @@ impl JobCommand {
                     println!("Job result header found: {result_bin:#?}");
                 }
 
+                // Create display options
+                let display_options = crate::display::DisplayOptions {
+                    format: format.clone(),
+                    color_enabled: true,
+                    max_field_length: None,
+                    use_unicode: true,
+                    no_truncate: *no_truncate,
+                };
+
+                // Start streaming session
+                JobResultCommand::start_streaming_session(
+                    "job execution",
+                    format,
+                    &display_options,
+                );
+
                 // result meta header
                 JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
-                // print streaming response
+
+                // print streaming response with improved formatting
+                let mut item_count = 0;
                 while let Ok(Some(item)) = response.message().await {
                     match &item.item {
                         Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
-                            JobResultCommand::print_job_result_output(
+                            JobResultCommand::print_streaming_output(
                                 v.as_slice(),
                                 result_desc.clone(),
+                                format,
+                                &display_options,
+                                item_count,
                             );
+                            item_count += 1;
                         }
                         Some(jobworkerp::data::result_output_item::Item::End(_)) => {
-                            println!("end of stream");
                             break;
                         }
                         None => {
-                            println!("no item");
+                            // Skip empty items
                         }
                     }
                 }
+
+                // End streaming session
+                JobResultCommand::end_streaming_session(item_count, format, &display_options);
                 // if let Some(result) = response.result {
                 //     JobResultCommand::print_job_result(&result, result_desc);
                 // } else {
@@ -283,6 +349,8 @@ impl JobCommand {
                 run_after_time,
                 timeout,
                 workflow_file,
+                format,
+                no_truncate,
             } => {
                 let helper = JobCommandHelper::new(client.clone());
                 let (_span, cx) =
@@ -383,29 +451,52 @@ impl JobCommand {
                             Err(e) => println!("Failed to decode job ID: {e}"),
                         }
                     }
+                    // Create display options for workflow
+                    let display_options = crate::display::DisplayOptions {
+                        format: format.clone(),
+                        color_enabled: true,
+                        max_field_length: None,
+                        use_unicode: true,
+                        no_truncate: *no_truncate,
+                    };
+
                     // Check for job result header in initial response metadata
                     if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
                         println!("Job result initial response header found");
                         JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
                     }
 
+                    // Start streaming session for workflow
+                    JobResultCommand::start_streaming_session(
+                        "workflow execution",
+                        format,
+                        &display_options,
+                    );
+
+                    let mut item_count = 0;
                     while let Ok(Some(item)) = response.message().await {
                         match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
-                                JobResultCommand::print_job_result_output(
+                                JobResultCommand::print_streaming_output(
                                     v.as_slice(),
                                     result_desc.clone(),
+                                    format,
+                                    &display_options,
+                                    item_count,
                                 );
+                                item_count += 1;
                             }
                             Some(jobworkerp::data::result_output_item::Item::End(_)) => {
-                                println!("end of stream");
                                 break;
                             }
                             None => {
-                                println!("no item");
+                                // Skip empty items
                             }
                         }
                     }
+
+                    // End streaming session for workflow
+                    JobResultCommand::end_streaming_session(item_count, format, &display_options);
                     //  // Check for job result header in last response metadata
                     // if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
                     //     println!("Job result header found in last response metadata");
@@ -421,7 +512,7 @@ impl JobCommand {
                                 {
                                     println!("Trailer job result header found");
                                     JobResultCommand::print_job_result_metadata(
-                                        &meta,
+                                        &trailers,
                                         result_desc.clone(),
                                     );
                                 }
@@ -453,18 +544,76 @@ impl JobCommand {
                     println!("job not found");
                 }
             }
-            JobCommand::List { offset, limit } => {
+            JobCommand::List {
+                offset,
+                limit,
+                format,
+                no_truncate,
+            } => {
                 let request = FindListRequest {
                     offset: *offset,
                     limit: (*limit).map(|x| x as i32),
                 };
                 let response = client.job_client().await.find_list(request).await.unwrap();
-                let meta = response.metadata().clone();
                 let mut inner = response.into_inner();
-                println!("{meta:#?}");
-                while let Some(data) = inner.message().await.unwrap() {
-                    print_job_with_request(client, data).await.unwrap();
+
+                // Collect all jobs into a vector for batch processing
+                let mut jobs = Vec::new();
+                loop {
+                    match inner.message().await {
+                        Ok(Some(job_data)) => {
+                            // Get args descriptor for proper display
+                            let args_descriptor = if let Some(data) = job_data.data.as_ref() {
+                                if let Some(worker_id) = data.worker_id.as_ref() {
+                                    JobworkerpProto::find_runner_descriptors_by_worker(
+                                        client,
+                                        job_request::Worker::WorkerId(worker_id.clone()),
+                                    )
+                                    .await
+                                    .ok()
+                                    .and_then(|(_, args_desc, _)| args_desc)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            let job_json = job_to_json(&job_data, None, args_descriptor, format);
+                            jobs.push(job_json);
+                        }
+                        Ok(None) => {
+                            // Stream ended
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Error reading from stream: {}", e);
+                            break;
+                        }
+                    }
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
             JobCommand::Delete { id } => {
                 let id = JobId { value: *id };
@@ -480,7 +629,12 @@ impl JobCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            JobCommand::ListWithProcessingStatus { status, limit } => {
+            JobCommand::ListWithProcessingStatus {
+                status,
+                limit,
+                format,
+                no_truncate,
+            } => {
                 let request = FindListWithProcessingStatusRequest {
                     status: status.to_grpc() as i32,
                     limit: *limit,
@@ -491,18 +645,72 @@ impl JobCommand {
                     .find_list_with_processing_status(request)
                     .await
                     .unwrap();
-                let meta = response.metadata().clone();
                 let mut inner = response.into_inner();
-                println!("{meta:#?}");
-                while let Some(job_and_status) = inner.message().await.unwrap() {
-                    if let Some(job) = job_and_status.job {
-                        print_job_with_request(client, job).await.unwrap();
-                        if let Some(status_val) = job_and_status.status {
-                            let status_enum = JobProcessingStatus::try_from(status_val).unwrap_or(JobProcessingStatus::Unknown);
-                            println!("\t[processing_status] {:?}", status_enum.as_str_name());
+
+                // Collect all jobs with processing status
+                let mut jobs = Vec::new();
+                loop {
+                    match inner.message().await {
+                        Ok(Some(job_and_status)) => {
+                            if let Some(job) = job_and_status.job {
+                                let processing_status = job_and_status
+                                    .status
+                                    .and_then(|s| JobProcessingStatus::try_from(s).ok());
+
+                                // Get args descriptor for proper display
+                                let args_descriptor = if let Some(data) = job.data.as_ref() {
+                                    if let Some(worker_id) = data.worker_id.as_ref() {
+                                        JobworkerpProto::find_runner_descriptors_by_worker(
+                                            client,
+                                            job_request::Worker::WorkerId(worker_id.clone()),
+                                        )
+                                        .await
+                                        .ok()
+                                        .and_then(|(_, args_desc, _)| args_desc)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                let job_json =
+                                    job_to_json(&job, processing_status, args_descriptor, format);
+                                jobs.push(job_json);
+                            }
+                        }
+                        Ok(None) => {
+                            // Stream ended
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Error reading from stream: {}", e);
+                            break;
                         }
                     }
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&jobs, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
         }
         async fn print_job_with_request(

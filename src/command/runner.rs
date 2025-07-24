@@ -8,12 +8,19 @@ use std::collections::HashMap;
 use crate::{
     client::JobworkerpClient,
     command::to_request,
+    display::{
+        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+        JsonVisualizer, TableVisualizer,
+    },
     jobworkerp::{
         data::{Runner, RunnerId},
         service::{CountCondition, FindListRequest},
     },
 };
 use clap::Parser;
+
+pub mod display;
+use display::runner_to_json;
 #[derive(Parser, Debug)]
 pub struct RunnerArg {
     #[clap(subcommand)]
@@ -35,16 +42,28 @@ pub enum RunnerCommand {
     Find {
         #[clap(short, long)]
         id: i64,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     FindByName {
         #[clap(short, long)]
         name: String,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     List {
         #[clap(short, long)]
         offset: Option<i64>,
         #[clap(short, long)]
         limit: Option<i32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Delete {
         #[clap(short, long)]
@@ -88,7 +107,7 @@ impl RunnerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            RunnerCommand::Find { id } => {
+            RunnerCommand::Find { id, format, no_truncate } => {
                 let id = RunnerId { value: *id };
                 let response = client
                     .runner_client()
@@ -99,12 +118,12 @@ impl RunnerCommand {
                     .into_inner()
                     .data;
                 if let Some(data) = response {
-                    Self::print_runner(&data);
+                    Self::print_runner_formatted(&data, format, *no_truncate);
                 } else {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::FindByName { name } => {
+            RunnerCommand::FindByName { name, format, no_truncate } => {
                 let request = crate::jobworkerp::service::RunnerNameRequest { name: name.clone() };
                 let response = client
                     .runner_client()
@@ -115,12 +134,12 @@ impl RunnerCommand {
                     .into_inner()
                     .data;
                 if let Some(data) = response {
-                    Self::print_runner(&data);
+                    Self::print_runner_formatted(&data, format, *no_truncate);
                 } else {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::List { offset, limit } => {
+            RunnerCommand::List { offset, limit, format, no_truncate } => {
                 let request = FindListRequest {
                     offset: *offset,
                     limit: *limit,
@@ -131,15 +150,37 @@ impl RunnerCommand {
                     .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                println!("meta: {:#?}", response.metadata());
+
                 let mut data = response.into_inner();
-                while let Some(data) = data.message().await.unwrap() {
-                    Self::print_runner(&data);
+                
+                // Collect all runners into a vector for batch processing
+                let mut runners = Vec::new();
+                while let Some(runner) = data.message().await.unwrap() {
+                    let runner_json = runner_to_json(&runner, format, *no_truncate);
+                    runners.push(runner_json);
                 }
-                println!(
-                    "trailer: {:#?}",
-                    data.trailers().await.unwrap().unwrap_or_default()
-                );
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&runners, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&runners, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&runners, &options)
+                    }
+                };
+
+                println!("{}", output);
             }
             RunnerCommand::Delete { id } => {
                 let id = RunnerId { value: *id };
@@ -157,6 +198,37 @@ impl RunnerCommand {
             }
         }
     }
+    pub fn print_runner_formatted(
+        runner: &Runner,
+        format: &crate::display::DisplayFormat,
+        no_truncate: bool,
+    ) {
+        let runner_json = runner_to_json(runner, format, no_truncate);
+        let runners = vec![runner_json];
+
+        // Display using the appropriate visualizer
+        let options = DisplayOptions::new(format.clone())
+            .with_color(supports_color())
+            .with_no_truncate(no_truncate);
+
+        let output = match format {
+            crate::display::DisplayFormat::Table => {
+                let visualizer = TableVisualizer;
+                visualizer.visualize(&runners, &options)
+            }
+            crate::display::DisplayFormat::Card => {
+                let visualizer = CardVisualizer;
+                visualizer.visualize(&runners, &options)
+            }
+            crate::display::DisplayFormat::Json => {
+                let visualizer = JsonPrettyVisualizer;
+                visualizer.visualize(&runners, &options)
+            }
+        };
+
+        println!("{}", output);
+    }
+
     pub fn print_runner(runner: &Runner) {
         if let Runner {
             id: Some(_id),

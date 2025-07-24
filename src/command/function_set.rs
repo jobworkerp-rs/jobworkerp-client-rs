@@ -18,6 +18,8 @@ use crate::{
 use clap::Parser;
 use serde_json::Value;
 
+pub mod display;
+
 #[derive(Parser, Debug)]
 pub struct FunctionSetArg {
     #[clap(subcommand)]
@@ -43,12 +45,20 @@ pub enum FunctionSetCommand {
     FindByName {
         #[clap(short, long)]
         name: String,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     List {
         #[clap(short, long)]
         offset: Option<i64>,
         #[clap(short, long)]
         limit: Option<i32>,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
     Update {
         #[clap(short, long)]
@@ -113,7 +123,11 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::FindByName { name } => {
+            FunctionSetCommand::FindByName { name, format, no_truncate } => {
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::function_set_to_json;
+
                 let request = FindByNameRequest { name: name.clone() };
                 let response = client
                     .function_set_client()
@@ -124,12 +138,38 @@ impl FunctionSetCommand {
                     .into_inner()
                     .data;
                 if let Some(function_set) = response {
-                    print_function_set(function_set);
+                    let function_set_json = function_set_to_json(&function_set, format);
+                    let function_sets_vec = vec![function_set_json];
+
+                    let options = DisplayOptions::new(format.clone())
+                        .with_color(supports_color())
+                        .with_no_truncate(*no_truncate);
+
+                    let output = match format {
+                        crate::display::DisplayFormat::Table => {
+                            let visualizer = TableVisualizer;
+                            visualizer.visualize(&function_sets_vec, &options)
+                        }
+                        crate::display::DisplayFormat::Card => {
+                            let visualizer = CardVisualizer;
+                            visualizer.visualize(&function_sets_vec, &options)
+                        }
+                        crate::display::DisplayFormat::Json => {
+                            let visualizer = JsonPrettyVisualizer;
+                            visualizer.visualize(&function_sets_vec, &options)
+                        }
+                    };
+
+                    println!("{}", output);
                 } else {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::List { offset, limit } => {
+            FunctionSetCommand::List { offset, limit, format, no_truncate } => {
+                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer};
+                use self::display::function_set_to_json;
+
                 let response = client
                     .function_set_client()
                     .await
@@ -145,11 +185,38 @@ impl FunctionSetCommand {
                     )
                     .await
                     .unwrap();
+                    
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
+                
+                // Collect all function sets into a vector for batch processing
+                let mut function_sets_json = Vec::new();
                 while let Some(function_set) = data.message().await.unwrap() {
-                    print_function_set(function_set);
+                    let function_set_json = function_set_to_json(&function_set, format);
+                    function_sets_json.push(function_set_json);
                 }
+
+                // Display using the appropriate visualizer
+                let options = DisplayOptions::new(format.clone())
+                    .with_color(supports_color())
+                    .with_no_truncate(*no_truncate);
+
+                let output = match format {
+                    crate::display::DisplayFormat::Table => {
+                        let visualizer = TableVisualizer;
+                        visualizer.visualize(&function_sets_json, &options)
+                    }
+                    crate::display::DisplayFormat::Card => {
+                        let visualizer = CardVisualizer;
+                        visualizer.visualize(&function_sets_json, &options)
+                    }
+                    crate::display::DisplayFormat::Json => {
+                        let visualizer = JsonPrettyVisualizer;
+                        visualizer.visualize(&function_sets_json, &options)
+                    }
+                };
+
+                println!("{}", output);
                 println!(
                     "trailers: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()

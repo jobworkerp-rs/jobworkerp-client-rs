@@ -17,6 +17,7 @@ pub mod jobworkerp {
 pub mod built_in;
 pub mod client;
 pub mod command;
+pub mod display;
 pub mod error;
 pub mod grpc;
 pub mod plugins;
