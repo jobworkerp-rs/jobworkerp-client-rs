@@ -28,7 +28,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
-use command_utils::protobuf::ProtobufDescriptor;
+// use command_utils::protobuf::ProtobufDescriptor;
 use std::{collections::HashMap, process::exit};
 
 pub mod display;
@@ -238,7 +238,11 @@ impl WorkerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            WorkerCommand::Find { id, format, no_truncate } => {
+            WorkerCommand::Find {
+                id,
+                format,
+                no_truncate,
+            } => {
                 let id = WorkerId { value: *id };
                 let response = client
                     .worker_client()
@@ -249,12 +253,18 @@ impl WorkerCommand {
                     .into_inner()
                     .data;
                 if let Some(worker) = response {
-                    print_worker_formatted(client, worker, format, *no_truncate).await.unwrap();
+                    print_worker_formatted(client, worker, format, *no_truncate)
+                        .await
+                        .unwrap();
                 } else {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::FindByName { name, format, no_truncate } => {
+            WorkerCommand::FindByName {
+                name,
+                format,
+                no_truncate,
+            } => {
                 let name = WorkerNameRequest { name: name.clone() };
                 let response = client
                     .worker_client()
@@ -265,12 +275,19 @@ impl WorkerCommand {
                     .into_inner()
                     .data;
                 if let Some(worker) = response {
-                    print_worker_formatted(client, worker, format, *no_truncate).await.unwrap();
+                    print_worker_formatted(client, worker, format, *no_truncate)
+                        .await
+                        .unwrap();
                 } else {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::List { offset, limit, format, no_truncate } => {
+            WorkerCommand::List {
+                offset,
+                limit,
+                format,
+                no_truncate,
+            } => {
                 let response = client
                     .worker_client()
                     .await
@@ -289,7 +306,7 @@ impl WorkerCommand {
                     .unwrap();
 
                 let mut data = response.into_inner();
-                
+
                 // Collect all workers into a vector for batch processing
                 let mut workers = Vec::new();
                 while let Some(worker) = data.message().await.unwrap() {
@@ -478,59 +495,59 @@ impl WorkerCommand {
             Ok(())
         }
 
-        async fn print_worker(
-            client: &crate::client::JobworkerpClient,
-            worker: jobworkerp::data::Worker,
-        ) -> Result<()> {
-            if let jobworkerp::data::Worker {
-                id: Some(wid),
-                data: Some(wdat),
-            } = worker.clone()
-            {
-                let op = JobworkerpProto::find_worker_runner_settings_descriptors(
-                    client,
-                    wdat.runner_id.unwrap(),
-                )
-                .await
-                .ok()
-                .flatten();
-                println!("[worker]:\n\t[id] {}", &wid.value);
-                println!("\t[name] {}", &wdat.name);
-                println!("\t[description] {}", &wdat.description);
-                println!(
-                    "\t[runner_id] {}",
-                    wdat.runner_id.map(|s| s.value).unwrap_or_default()
-                );
-                if let Some(op) = op {
-                    match ProtobufDescriptor::get_message_from_bytes(op, &wdat.runner_settings) {
-                        Ok(msg) => {
-                            println!("\t[runner_settings] |");
-                            ProtobufDescriptor::print_dynamic_message(&msg, false);
-                        }
-                        Err(e) => {
-                            println!(
-                                "\t[runner_settings (error)] failed to parse runner_settings message: {e:?}"
-                            );
-                        }
-                    }
-                } else {
-                    println!(
-                        "\t[runner_settings] {}",
-                        String::from_utf8_lossy(wdat.runner_settings.as_slice())
-                    );
-                }
-                println!("\t[periodic] {}", wdat.periodic_interval);
-                println!("\t[channel] {:?}", wdat.channel);
-                println!("\t[queue_type] {:?}", wdat.queue_type);
-                println!("\t[response_type] {:?}", wdat.response_type);
-                println!("\t[store_success] {}", wdat.store_success);
-                println!("\t[store_failure] {}", wdat.store_failure);
-                println!("\t[use_static] {}", wdat.use_static);
-                println!("\t[broadcast_results] {}", wdat.broadcast_results);
-            } else {
-                println!("worker not found");
-            }
-            Ok(())
-        }
+        // async fn print_worker(
+        //     client: &crate::client::JobworkerpClient,
+        //     worker: jobworkerp::data::Worker,
+        // ) -> Result<()> {
+        //     if let jobworkerp::data::Worker {
+        //         id: Some(wid),
+        //         data: Some(wdat),
+        //     } = worker.clone()
+        //     {
+        //         let op = JobworkerpProto::find_worker_runner_settings_descriptors(
+        //             client,
+        //             wdat.runner_id.unwrap(),
+        //         )
+        //         .await
+        //         .ok()
+        //         .flatten();
+        //         println!("[worker]:\n\t[id] {}", &wid.value);
+        //         println!("\t[name] {}", &wdat.name);
+        //         println!("\t[description] {}", &wdat.description);
+        //         println!(
+        //             "\t[runner_id] {}",
+        //             wdat.runner_id.map(|s| s.value).unwrap_or_default()
+        //         );
+        //         if let Some(op) = op {
+        //             match ProtobufDescriptor::get_message_from_bytes(op, &wdat.runner_settings) {
+        //                 Ok(msg) => {
+        //                     println!("\t[runner_settings] |");
+        //                     ProtobufDescriptor::print_dynamic_message(&msg, false);
+        //                 }
+        //                 Err(e) => {
+        //                     println!(
+        //                         "\t[runner_settings (error)] failed to parse runner_settings message: {e:?}"
+        //                     );
+        //                 }
+        //             }
+        //         } else {
+        //             println!(
+        //                 "\t[runner_settings] {}",
+        //                 String::from_utf8_lossy(wdat.runner_settings.as_slice())
+        //             );
+        //         }
+        //         println!("\t[periodic] {}", wdat.periodic_interval);
+        //         println!("\t[channel] {:?}", wdat.channel);
+        //         println!("\t[queue_type] {:?}", wdat.queue_type);
+        //         println!("\t[response_type] {:?}", wdat.response_type);
+        //         println!("\t[store_success] {}", wdat.store_success);
+        //         println!("\t[store_failure] {}", wdat.store_failure);
+        //         println!("\t[use_static] {}", wdat.use_static);
+        //         println!("\t[broadcast_results] {}", wdat.broadcast_results);
+        //     } else {
+        //         println!("worker not found");
+        //     }
+        //     Ok(())
+        // }
     }
 }
