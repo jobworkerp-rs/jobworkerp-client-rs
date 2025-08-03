@@ -107,7 +107,11 @@ impl RunnerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            RunnerCommand::Find { id, format, no_truncate } => {
+            RunnerCommand::Find {
+                id,
+                format,
+                no_truncate,
+            } => {
                 let id = RunnerId { value: *id };
                 let response = client
                     .runner_client()
@@ -123,7 +127,11 @@ impl RunnerCommand {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::FindByName { name, format, no_truncate } => {
+            RunnerCommand::FindByName {
+                name,
+                format,
+                no_truncate,
+            } => {
                 let request = crate::jobworkerp::service::RunnerNameRequest { name: name.clone() };
                 let response = client
                     .runner_client()
@@ -139,7 +147,12 @@ impl RunnerCommand {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::List { offset, limit, format, no_truncate } => {
+            RunnerCommand::List {
+                offset,
+                limit,
+                format,
+                no_truncate,
+            } => {
                 let request = FindListRequest {
                     offset: *offset,
                     limit: *limit,
@@ -152,7 +165,7 @@ impl RunnerCommand {
                     .unwrap();
 
                 let mut data = response.into_inner();
-                
+
                 // Collect all runners into a vector for batch processing
                 let mut runners = Vec::new();
                 while let Some(runner) = data.message().await.unwrap() {

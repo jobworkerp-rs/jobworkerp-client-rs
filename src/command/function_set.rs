@@ -122,10 +122,16 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::FindByName { name, format, no_truncate } => {
-                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer};
+            FunctionSetCommand::FindByName {
+                name,
+                format,
+                no_truncate,
+            } => {
                 use self::display::function_set_to_json;
+                use crate::display::{
+                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer,
+                };
 
                 let request = FindByNameRequest { name: name.clone() };
                 let response = client
@@ -164,10 +170,17 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::List { offset, limit, format, no_truncate } => {
-                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer};
+            FunctionSetCommand::List {
+                offset,
+                limit,
+                format,
+                no_truncate,
+            } => {
                 use self::display::function_set_to_json;
+                use crate::display::{
+                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer,
+                };
 
                 let response = client
                     .function_set_client()
@@ -184,10 +197,10 @@ impl FunctionSetCommand {
                     )
                     .await
                     .unwrap();
-                    
+
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
-                
+
                 // Collect all function sets into a vector for batch processing
                 let mut function_sets_json = Vec::new();
                 while let Some(function_set) = data.message().await.unwrap() {

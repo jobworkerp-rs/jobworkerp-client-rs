@@ -1,9 +1,9 @@
 //! Runner-specific display functionality
-//! 
+//!
 //! This module handles the conversion of Runner data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
-use crate::display::{DisplayFormat, format::EnumFormatter};
+use crate::display::{format::EnumFormatter, DisplayFormat};
 use crate::jobworkerp::data::{Runner, RunnerType, StreamingOutputType};
 use serde_json::Value as JsonValue;
 
@@ -16,7 +16,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
             DisplayFormat::Table => match runner_type {
                 RunnerType::Plugin => "PLUGIN",
                 RunnerType::Command => "COMMAND",
-                RunnerType::HttpRequest => "HTTP_REQUEST", 
+                RunnerType::HttpRequest => "HTTP_REQUEST",
                 RunnerType::GrpcUnary => "GRPC_UNARY",
                 RunnerType::Docker => "DOCKER",
                 RunnerType::SlackPostMessage => "SLACK_POST_MESSAGE",
@@ -26,7 +26,8 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::LlmCompletion => "LLM_COMPLETION",
                 RunnerType::InlineWorkflow => "INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "REUSABLE_WORKFLOW",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Card => match runner_type {
                 RunnerType::Plugin => "⚡ PLUGIN",
                 RunnerType::Command => "💻 COMMAND",
@@ -40,7 +41,8 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::LlmCompletion => "📝 LLM_COMPLETION",
                 RunnerType::InlineWorkflow => "🔄 INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "🔄 REUSABLE_WORKFLOW",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
         }
     }
@@ -56,19 +58,25 @@ impl EnumFormatter<StreamingOutputType> for StreamingOutputTypeFormatter {
                 StreamingOutputType::Streaming => "STREAMING",
                 StreamingOutputType::NonStreaming => "NON_STREAMING",
                 StreamingOutputType::Both => "BOTH",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Card => match output_type {
                 StreamingOutputType::Streaming => "📊 STREAMING",
                 StreamingOutputType::NonStreaming => "📄 NON_STREAMING",
                 StreamingOutputType::Both => "🔄 BOTH",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Json => output_type.as_str_name().to_string(),
         }
     }
 }
 
 /// Truncate proto definition for display
-fn truncate_proto_definition(definition: &str, format: &DisplayFormat, no_truncate: bool) -> String {
+fn truncate_proto_definition(
+    definition: &str,
+    format: &DisplayFormat,
+    no_truncate: bool,
+) -> String {
     match format {
         DisplayFormat::Json => definition.to_string(),
         _ => {
@@ -80,7 +88,7 @@ fn truncate_proto_definition(definition: &str, format: &DisplayFormat, no_trunca
                     DisplayFormat::Card => 200,
                     DisplayFormat::Json => return definition.to_string(),
                 };
-                
+
                 if definition.len() > max_length {
                     format!("{}...", &definition[..max_length.saturating_sub(3)])
                 } else {
@@ -92,11 +100,7 @@ fn truncate_proto_definition(definition: &str, format: &DisplayFormat, no_trunca
 }
 
 /// Convert Runner to JSON with format-specific enum decoration
-pub fn runner_to_json(
-    runner: &Runner,
-    format: &DisplayFormat,
-    no_truncate: bool,
-) -> JsonValue {
+pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool) -> JsonValue {
     let runner_type_formatter = RunnerTypeFormatter;
     let output_type_formatter = StreamingOutputTypeFormatter;
 
@@ -109,20 +113,20 @@ pub fn runner_to_json(
         runner_json["description"] = serde_json::json!(data.description);
 
         // Format enums with decoration
-        runner_json["runner_type"] = serde_json::json!(
-            runner_type_formatter.format(data.runner_type(), format)
-        );
+        runner_json["runner_type"] =
+            serde_json::json!(runner_type_formatter.format(data.runner_type(), format));
 
         let output_type = StreamingOutputType::try_from(data.output_type)
             .unwrap_or(StreamingOutputType::NonStreaming);
-        runner_json["output_type"] = serde_json::json!(
-            output_type_formatter.format(output_type, format)
-        );
+        runner_json["output_type"] =
+            serde_json::json!(output_type_formatter.format(output_type, format));
 
         // Format proto definition with truncation
-        runner_json["definition"] = serde_json::json!(
-            truncate_proto_definition(&data.definition, format, no_truncate)
-        );
+        runner_json["definition"] = serde_json::json!(truncate_proto_definition(
+            &data.definition,
+            format,
+            no_truncate
+        ));
     }
 
     runner_json
@@ -135,19 +139,19 @@ mod tests {
     #[test]
     fn test_runner_type_formatter() {
         let formatter = RunnerTypeFormatter;
-        
+
         // Test table format
         assert_eq!(
             formatter.format(RunnerType::McpServer, &DisplayFormat::Table),
             "MCP_SERVER"
         );
-        
+
         // Test card format
         assert_eq!(
             formatter.format(RunnerType::Plugin, &DisplayFormat::Card),
             "⚡ PLUGIN"
         );
-        
+
         // Test JSON format
         assert_eq!(
             formatter.format(RunnerType::InlineWorkflow, &DisplayFormat::Json),
@@ -158,19 +162,19 @@ mod tests {
     #[test]
     fn test_streaming_output_type_formatter() {
         let formatter = StreamingOutputTypeFormatter;
-        
+
         // Test table format
         assert_eq!(
             formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Table),
             "STREAMING"
         );
-        
-        // Test card format  
+
+        // Test card format
         assert_eq!(
             formatter.format(StreamingOutputType::NonStreaming, &DisplayFormat::Card),
             "📄 NON_STREAMING"
         );
-        
+
         // Test JSON format
         assert_eq!(
             formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Json),
@@ -181,16 +185,16 @@ mod tests {
     #[test]
     fn test_truncate_proto_definition() {
         let long_definition = "syntax = \"proto3\";\n\npackage test;\n\nmessage TestMessage {\n  string field1 = 1;\n  int32 field2 = 2;\n  bool field3 = 3;\n}";
-        
+
         // Test table format with truncation
         let result = truncate_proto_definition(long_definition, &DisplayFormat::Table, false);
         assert!(result.len() <= 50);
         assert!(result.ends_with("..."));
-        
+
         // Test no truncate
         let result = truncate_proto_definition(long_definition, &DisplayFormat::Table, true);
         assert_eq!(result, long_definition);
-        
+
         // Test JSON format (no truncation)
         let result = truncate_proto_definition(long_definition, &DisplayFormat::Json, false);
         assert_eq!(result, long_definition);

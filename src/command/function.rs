@@ -99,9 +99,11 @@ impl FunctionCommand {
                     exclude_runner: *exclude_runner,
                     exclude_worker: *exclude_worker,
                 };
-                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer};
                 use self::display::function_to_json;
+                use crate::display::{
+                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer,
+                };
 
                 let response = client
                     .function_client()
@@ -109,10 +111,10 @@ impl FunctionCommand {
                     .find_list(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                    
+
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
-                
+
                 // Collect all functions into a vector for batch processing
                 let mut functions_json = Vec::new();
                 while let Some(function) = data.message().await.unwrap() {
@@ -141,16 +143,22 @@ impl FunctionCommand {
                 };
 
                 println!("{}", output);
-                
+
                 println!(
                     "trailer: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionCommand::ListBySet { name, format, no_truncate } => {
-                use crate::display::{utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer};
+            FunctionCommand::ListBySet {
+                name,
+                format,
+                no_truncate,
+            } => {
                 use self::display::function_to_json;
+                use crate::display::{
+                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+                    JsonVisualizer, TableVisualizer,
+                };
 
                 let request = FindFunctionSetRequest { name: name.clone() };
                 let response = client
@@ -159,10 +167,10 @@ impl FunctionCommand {
                     .find_list_by_set(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
-                    
+
                 println!("meta: {:#?}", response.metadata());
                 let mut data = response.into_inner();
-                
+
                 // Collect all functions into a vector for batch processing
                 let mut functions_json = Vec::new();
                 while let Some(function) = data.message().await.unwrap() {
@@ -191,7 +199,7 @@ impl FunctionCommand {
                 };
 
                 println!("{}", output);
-                
+
                 println!(
                     "trailer: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()

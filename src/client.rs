@@ -7,10 +7,10 @@ use crate::jobworkerp::function::service::{
     function_set_service_client::FunctionSetServiceClient,
 };
 use crate::jobworkerp::service::{
+    job_processing_status_service_client::JobProcessingStatusServiceClient,
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
-    job_processing_status_service_client::JobProcessingStatusServiceClient, runner_service_client::RunnerServiceClient,
-    worker_service_client::WorkerServiceClient,
+    runner_service_client::RunnerServiceClient, worker_service_client::WorkerServiceClient,
 };
 use anyhow::Result;
 use std::time::Duration;
@@ -58,9 +58,12 @@ impl JobworkerpClient {
             .max_decoding_message_size(128 * 1024 * 1024) // 128MB for large responses
             .max_encoding_message_size(64 * 1024 * 1024) // 64MB for large requests
     }
-    pub async fn job_processing_status_client(&self) -> JobProcessingStatusServiceClient<tonic::transport::Channel> {
+    pub async fn job_processing_status_client(
+        &self,
+    ) -> JobProcessingStatusServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
-        JobProcessingStatusServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+        JobProcessingStatusServiceClient::new(cell.clone())
+            .max_decoding_message_size(128 * 1024 * 1024)
     }
     pub async fn job_restore_client(&self) -> JobRestoreServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
