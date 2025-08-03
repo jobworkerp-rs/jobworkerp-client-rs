@@ -1,5 +1,5 @@
-use serde_json::{json, Value as JsonValue};
 use crate::display::DisplayFormat;
+use serde_json::{json, Value as JsonValue};
 
 /// Convert FunctionSet to JSON format for display
 pub fn function_set_to_json(
@@ -17,42 +17,44 @@ pub fn function_set_to_json(
     if let Some(data) = &function_set.data {
         json_obj["name"] = json!(data.name);
         json_obj["description"] = json!(data.description);
-        
+
         // Handle category as an integer
         json_obj["category"] = match format {
             DisplayFormat::Json => json!(data.category),
-            _ => json!(format!("📂 Category {}", data.category))
+            _ => json!(format!("📂 Category {}", data.category)),
         };
 
         // Handle targets (runner/worker references)
         if !data.targets.is_empty() {
-            let targets_json: Vec<JsonValue> = data.targets.iter().map(|target| {
-                let type_display = match format {
-                    DisplayFormat::Json => {
-                        match target.r#type() {
+            let targets_json: Vec<JsonValue> = data
+                .targets
+                .iter()
+                .map(|target| {
+                    let type_display = match format {
+                        DisplayFormat::Json => match target.r#type() {
                             crate::jobworkerp::function::data::FunctionType::Runner => "RUNNER",
                             crate::jobworkerp::function::data::FunctionType::Worker => "WORKER",
-                        }.to_string()
-                    }
-                    _ => {
-                        match target.r#type() {
+                        }
+                        .to_string(),
+                        _ => match target.r#type() {
                             crate::jobworkerp::function::data::FunctionType::Runner => "🚀 RUNNER",
                             crate::jobworkerp::function::data::FunctionType::Worker => "⚙️ WORKER",
-                        }.to_string()
-                    }
-                };
-                
-                json!({
-                    "id": target.id,
-                    "type": type_display
+                        }
+                        .to_string(),
+                    };
+
+                    json!({
+                        "id": target.id,
+                        "type": type_display
+                    })
                 })
-            }).collect();
-            
+                .collect();
+
             json_obj["targets"] = match format {
                 DisplayFormat::Json => json!(targets_json),
-                _ => json!(format!("🎯 {} targets", targets_json.len()))
+                _ => json!(format!("🎯 {} targets", targets_json.len())),
             };
-            
+
             // For detailed view, also show target details
             if matches!(format, DisplayFormat::Card) || matches!(format, DisplayFormat::Json) {
                 json_obj["target_details"] = json!(targets_json);
@@ -66,7 +68,9 @@ pub fn function_set_to_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobworkerp::function::data::{FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType};
+    use crate::jobworkerp::function::data::{
+        FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType,
+    };
 
     #[test]
     fn test_function_set_to_json_basic() {
@@ -125,12 +129,10 @@ mod tests {
                 name: "json_test".to_string(),
                 description: "JSON format test".to_string(),
                 category: 2,
-                targets: vec![
-                    FunctionTarget {
-                        id: 3001,
-                        r#type: FunctionType::Runner as i32,
-                    },
-                ],
+                targets: vec![FunctionTarget {
+                    id: 3001,
+                    r#type: FunctionType::Runner as i32,
+                }],
             }),
         };
 
@@ -140,8 +142,8 @@ mod tests {
         if let Some(targets) = json.get("target_details") {
             assert_eq!(targets[0]["type"], "RUNNER");
         }
-        
-        // Test Card format (should have emoji decorations)  
+
+        // Test Card format (should have emoji decorations)
         let card_json = function_set_to_json(&function_set, &DisplayFormat::Card);
         assert_eq!(card_json["category"], "📂 Category 2");
         if let Some(targets) = card_json.get("target_details") {

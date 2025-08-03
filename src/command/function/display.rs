@@ -1,4 +1,4 @@
-use crate::display::{DisplayFormat, format::EnumFormatter};
+use crate::display::{format::EnumFormatter, DisplayFormat};
 use crate::jobworkerp::data::StreamingOutputType;
 use serde_json::{json, Value as JsonValue};
 
@@ -25,7 +25,7 @@ pub fn function_to_json(
     let formatter = StreamingOutputTypeFormatter;
     let output_type = StreamingOutputType::try_from(function.output_type)
         .unwrap_or(StreamingOutputType::NonStreaming);
-    
+
     let mut json_obj = json!({
         "name": function.name,
         "description": function.description,
@@ -46,7 +46,7 @@ pub fn function_to_json(
     match &function.schema {
         Some(crate::jobworkerp::function::data::function_specs::Schema::SingleSchema(schema)) => {
             let mut schema_obj = json!({});
-            
+
             if let Some(settings) = &schema.settings {
                 schema_obj["settings"] = match format {
                     DisplayFormat::Json => json!(settings),
@@ -60,7 +60,7 @@ pub fn function_to_json(
                     }
                 };
             }
-            
+
             schema_obj["arguments"] = match format {
                 DisplayFormat::Json => json!(schema.arguments),
                 _ => {
@@ -72,7 +72,7 @@ pub fn function_to_json(
                     }
                 }
             };
-            
+
             if let Some(result_schema) = &schema.result_output_schema {
                 schema_obj["result_output_schema"] = match format {
                     DisplayFormat::Json => json!(result_schema),
@@ -86,29 +86,33 @@ pub fn function_to_json(
                     }
                 };
             }
-            
+
             json_obj["schema"] = schema_obj;
         }
         Some(crate::jobworkerp::function::data::function_specs::Schema::McpTools(mcp_tools)) => {
-            let tools: Vec<JsonValue> = mcp_tools.list.iter().map(|tool| {
-                json!({
-                    "name": tool.name,
-                    "description": tool.description.as_ref().unwrap_or(&String::new()),
-                    "input_schema": match format {
-                        DisplayFormat::Json => tool.input_schema.clone(),
-                        _ => {
-                            // For Card/Table, truncate long schemas
-                            let schema = &tool.input_schema;
-                            if schema.len() > 150 {
-                                format!("{}... [truncated]", &schema[..147])
-                            } else {
-                                schema.clone()
+            let tools: Vec<JsonValue> = mcp_tools
+                .list
+                .iter()
+                .map(|tool| {
+                    json!({
+                        "name": tool.name,
+                        "description": tool.description.as_ref().unwrap_or(&String::new()),
+                        "input_schema": match format {
+                            DisplayFormat::Json => tool.input_schema.clone(),
+                            _ => {
+                                // For Card/Table, truncate long schemas
+                                let schema = &tool.input_schema;
+                                if schema.len() > 150 {
+                                    format!("{}... [truncated]", &schema[..147])
+                                } else {
+                                    schema.clone()
+                                }
                             }
                         }
-                    }
+                    })
                 })
-            }).collect();
-            
+                .collect();
+
             json_obj["mcp_tools"] = json!({
                 "count": tools.len(),
                 "tools": tools
@@ -135,13 +139,15 @@ pub fn function_result_to_json(
         let status_value = *status as i32;
         let status_result = crate::jobworkerp::data::ResultStatus::try_from(status_value)
             .unwrap_or(crate::jobworkerp::data::ResultStatus::OtherError);
-            
+
         json_obj["status"] = match format {
             DisplayFormat::Table | DisplayFormat::Card => {
                 // Add emoji decoration for status
                 match status_result {
                     crate::jobworkerp::data::ResultStatus::Success => json!("✅ SUCCESS"),
-                    crate::jobworkerp::data::ResultStatus::ErrorAndRetry => json!("🔄 ERROR_AND_RETRY"),
+                    crate::jobworkerp::data::ResultStatus::ErrorAndRetry => {
+                        json!("🔄 ERROR_AND_RETRY")
+                    }
                     crate::jobworkerp::data::ResultStatus::FatalError => json!("💥 FATAL_ERROR"),
                     crate::jobworkerp::data::ResultStatus::Abort => json!("🛑 ABORT"),
                     crate::jobworkerp::data::ResultStatus::MaxRetry => json!("🔥 MAX_RETRY"),
@@ -181,13 +187,13 @@ pub fn function_result_to_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobworkerp::function::data::{FunctionSpecs, FunctionSchema};
-    use crate::jobworkerp::data::{RunnerId, WorkerId};
+    use crate::jobworkerp::data::RunnerId;
+    use crate::jobworkerp::function::data::{FunctionSchema, FunctionSpecs};
 
     #[test]
     fn test_streaming_output_type_formatter() {
         let formatter = StreamingOutputTypeFormatter;
-        
+
         // Test Table format
         assert_eq!(
             formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Table),
@@ -197,7 +203,7 @@ mod tests {
             formatter.format(StreamingOutputType::NonStreaming, &DisplayFormat::Card),
             "📄 NON_STREAMING"
         );
-        
+
         // Test JSON format
         assert_eq!(
             formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Json),
@@ -214,13 +220,15 @@ mod tests {
             name: "test_function".to_string(),
             description: "Test function description".to_string(),
             output_type: StreamingOutputType::Streaming as i32,
-            schema: Some(crate::jobworkerp::function::data::function_specs::Schema::SingleSchema(
-                FunctionSchema {
-                    settings: Some("{}".to_string()),
-                    arguments: "{\"type\": \"object\"}".to_string(),
-                    result_output_schema: None,
-                }
-            )),
+            schema: Some(
+                crate::jobworkerp::function::data::function_specs::Schema::SingleSchema(
+                    FunctionSchema {
+                        settings: Some("{}".to_string()),
+                        arguments: "{\"type\": \"object\"}".to_string(),
+                        result_output_schema: None,
+                    },
+                ),
+            ),
         };
 
         let json = function_to_json(&function, &DisplayFormat::Table);
@@ -233,7 +241,7 @@ mod tests {
     #[test]
     fn test_function_result_to_json() {
         use crate::jobworkerp::function::data::FunctionResult;
-        
+
         let result = FunctionResult {
             output: "test output".to_string(),
             status: Some(crate::jobworkerp::data::ResultStatus::Success as i32),
