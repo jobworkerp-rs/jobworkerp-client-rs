@@ -43,7 +43,7 @@ pub mod color {
 
         match color {
             "red" => Paint::red(text).to_string(),
-            "green" => Paint::green(text).to_string(), 
+            "green" => Paint::green(text).to_string(),
             "yellow" => Paint::yellow(text).to_string(),
             "blue" => Paint::blue(text).to_string(),
             "cyan" => Paint::cyan(text).to_string(),
@@ -69,7 +69,7 @@ pub mod color {
     pub fn colorize_priority(priority: &str, enabled: bool) -> String {
         let color = match priority.to_lowercase().as_str() {
             s if s.contains("high") => "red",
-            s if s.contains("medium") => "yellow", 
+            s if s.contains("medium") => "yellow",
             s if s.contains("low") => "blue",
             _ => "white",
         };

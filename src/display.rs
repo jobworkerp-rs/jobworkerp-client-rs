@@ -1,18 +1,18 @@
 //! Display formatting module for CLI output
-//! 
+//!
 //! This module provides unified display functionality for various CLI commands,
 //! supporting multiple output formats (table, card, JSON) with customizable options.
 
 pub mod format;
-pub mod visualizer;
-pub mod utils;
 #[cfg(test)]
 mod test;
+pub mod utils;
+pub mod visualizer;
 
 // Re-exports for public API
 pub use format::DisplayFormat;
-pub use visualizer::{JsonVisualizer, TableVisualizer, CardVisualizer, JsonPrettyVisualizer};
-pub use utils::{truncate_string, format_json_hierarchy};
+pub use utils::{format_json_hierarchy, truncate_string};
+pub use visualizer::{CardVisualizer, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer};
 
 /// Display configuration options
 #[derive(Debug, Clone)]
@@ -48,8 +48,8 @@ impl DisplayOptions {
         Self {
             format: format.clone(),
             color_enabled: match format {
-                DisplayFormat::Json => false,  // Always disable colors for JSON
-                _ => true,  // Default enabled for other formats
+                DisplayFormat::Json => false, // Always disable colors for JSON
+                _ => true,                    // Default enabled for other formats
             },
             ..Default::default()
         }
@@ -59,8 +59,8 @@ impl DisplayOptions {
     /// Note: JSON format automatically disables colors regardless of this setting
     pub fn with_color(mut self, enabled: bool) -> Self {
         self.color_enabled = match self.format {
-            DisplayFormat::Json => false,  // Always disable colors for JSON
-            _ => enabled,  // Use the provided setting for other formats
+            DisplayFormat::Json => false, // Always disable colors for JSON
+            _ => enabled,                 // Use the provided setting for other formats
         };
         self
     }

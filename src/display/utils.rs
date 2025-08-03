@@ -1,5 +1,5 @@
 //! Utility functions for display formatting
-//! 
+//!
 //! This module provides helper functions for string manipulation,
 //! JSON hierarchy formatting, and other display-related utilities.
 
@@ -21,19 +21,19 @@ pub fn truncate_string(text: &str, max_length: Option<usize>) -> String {
 
 /// Format JSON value for hierarchical display with indentation
 pub fn format_json_hierarchy(
-    value: &JsonValue, 
+    value: &JsonValue,
     indent_level: usize,
     max_field_length: Option<usize>,
-    use_unicode: bool
+    use_unicode: bool,
 ) -> String {
     let indent = if use_unicode {
         "  ".repeat(indent_level)
     } else {
         "  ".repeat(indent_level)
     };
-    
+
     let child_indent = indent_level + 1;
-    
+
     match value {
         JsonValue::Null => "null".to_string(),
         JsonValue::Bool(b) => b.to_string(),
@@ -45,15 +45,11 @@ pub fn format_json_hierarchy(
             if arr.is_empty() {
                 return "[]".to_string();
             }
-            
+
             let mut result = "[\n".to_string();
             for (i, item) in arr.iter().enumerate() {
-                let formatted_item = format_json_hierarchy(
-                    item, 
-                    child_indent, 
-                    max_field_length, 
-                    use_unicode
-                );
+                let formatted_item =
+                    format_json_hierarchy(item, child_indent, max_field_length, use_unicode);
                 result.push_str(&format!("{}  {}", indent, formatted_item));
                 if i < arr.len() - 1 {
                     result.push(',');
@@ -67,16 +63,12 @@ pub fn format_json_hierarchy(
             if obj.is_empty() {
                 return "{}".to_string();
             }
-            
+
             let mut result = "{\n".to_string();
             let entries: Vec<_> = obj.iter().collect();
             for (i, (key, value)) in entries.iter().enumerate() {
-                let formatted_value = format_json_hierarchy(
-                    value, 
-                    child_indent, 
-                    max_field_length, 
-                    use_unicode
-                );
+                let formatted_value =
+                    format_json_hierarchy(value, child_indent, max_field_length, use_unicode);
                 result.push_str(&format!("{}  \"{}\": {}", indent, key, formatted_value));
                 if i < entries.len() - 1 {
                     result.push(',');
@@ -92,7 +84,7 @@ pub fn format_json_hierarchy(
 /// Convert JsonValue to a flat key-value representation for table display
 pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, String)> {
     let mut result = Vec::new();
-    
+
     match value {
         JsonValue::Object(obj) => {
             for (key, val) in obj {
@@ -101,7 +93,7 @@ pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, S
                 } else {
                     format!("{}.{}", prefix, key)
                 };
-                
+
                 match val {
                     JsonValue::Object(_) | JsonValue::Array(_) => {
                         result.extend(flatten_json_for_table(val, &full_key));
@@ -129,7 +121,7 @@ pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, S
             result.push((prefix.to_string(), json_value_to_string(value)));
         }
     }
-    
+
     result
 }
 
@@ -150,9 +142,11 @@ pub fn json_value_to_string(value: &JsonValue) -> String {
 /// Check if terminal output supports colors
 pub fn supports_color() -> bool {
     // Check if output is to a TTY and color environment variables
-    atty::is(atty::Stream::Stdout) && 
-        (std::env::var("NO_COLOR").is_err() || std::env::var("NO_COLOR") == Ok("".to_string())) &&
-        std::env::var("TERM").map(|term| term != "dumb").unwrap_or(true)
+    atty::is(atty::Stream::Stdout)
+        && (std::env::var("NO_COLOR").is_err() || std::env::var("NO_COLOR") == Ok("".to_string()))
+        && std::env::var("TERM")
+            .map(|term| term != "dumb")
+            .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -186,10 +180,10 @@ mod tests {
                 "array": [1, 2, 3]
             }
         });
-        
+
         let flattened = flatten_json_for_table(&json_obj, "");
         assert_eq!(flattened.len(), 5);
-        
+
         // Check if all expected keys are present
         let keys: Vec<String> = flattened.iter().map(|(k, _)| k.clone()).collect();
         assert!(keys.contains(&"name".to_string()));
@@ -197,13 +191,13 @@ mod tests {
         assert!(keys.contains(&"nested.array[0]".to_string()));
     }
 
-    #[test] 
+    #[test]
     fn test_format_json_hierarchy_simple() {
         let json_obj = json!({
             "key": "value",
             "number": 42
         });
-        
+
         let formatted = format_json_hierarchy(&json_obj, 0, Some(50), true);
         assert!(formatted.contains("\"key\": \"value\""));
         assert!(formatted.contains("\"number\": 42"));
@@ -218,7 +212,7 @@ mod tests {
                 "child": "value"
             }
         });
-        
+
         let formatted = format_json_hierarchy(&json_obj, 0, Some(50), true);
         assert!(formatted.contains("\"parent\":"));
         assert!(formatted.contains("\"child\": \"value\""));

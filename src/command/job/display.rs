@@ -1,14 +1,14 @@
 //! Job-specific display functionality
-//! 
+//!
 //! This module handles the conversion of Job data structures to JSON format
 //! with appropriate enum decoration based on display format.
 
-use crate::display::{DisplayFormat, format::EnumFormatter};
+use crate::display::{format::EnumFormatter, DisplayFormat};
 use crate::jobworkerp::data::{Job, JobProcessingStatus, Priority};
+use chrono::DateTime;
 use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 use serde_json::Value as JsonValue;
-use chrono::DateTime;
 
 /// Formatter for JobProcessingStatus enum
 pub struct JobProcessingStatusFormatter;
@@ -19,17 +19,19 @@ impl EnumFormatter<JobProcessingStatus> for JobProcessingStatusFormatter {
             DisplayFormat::Table => match status {
                 JobProcessingStatus::Running => "Running",
                 JobProcessingStatus::Pending => "Pending",
-                JobProcessingStatus::WaitResult => "Wait Result", 
+                JobProcessingStatus::WaitResult => "Wait Result",
                 JobProcessingStatus::Cancelling => "Cancelling",
                 JobProcessingStatus::Unknown => "Unknown",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Card => match status {
                 JobProcessingStatus::Running => "🟢 Running",
                 JobProcessingStatus::Pending => "🟡 Pending",
-                JobProcessingStatus::WaitResult => "🔵 Wait Result", 
+                JobProcessingStatus::WaitResult => "🔵 Wait Result",
                 JobProcessingStatus::Cancelling => "🔴 Cancelling",
                 JobProcessingStatus::Unknown => "⚫ Unknown",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Json => status.as_str_name().to_string(),
         }
     }
@@ -43,14 +45,16 @@ impl EnumFormatter<Priority> for PriorityFormatter {
         match format {
             DisplayFormat::Table => match priority {
                 Priority::High => "High",
-                Priority::Medium => "Medium", 
+                Priority::Medium => "Medium",
                 Priority::Low => "Low",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Card => match priority {
                 Priority::High => "🔴 High",
-                Priority::Medium => "🟠 Medium", 
+                Priority::Medium => "🟠 Medium",
                 Priority::Low => "Low",
-            }.to_string(),
+            }
+            .to_string(),
             DisplayFormat::Json => priority.as_str_name().to_string(),
         }
     }
@@ -85,14 +89,16 @@ pub fn job_to_json(
         job_json["status"] = JsonValue::String(status_formatter.format(status, format));
     }
 
-    // Add priority with format-specific decoration  
+    // Add priority with format-specific decoration
     if let Some(data) = job.data.as_ref() {
-        job_json["priority"] = JsonValue::String(priority_formatter.format(data.priority(), format));
+        job_json["priority"] =
+            JsonValue::String(priority_formatter.format(data.priority(), format));
     }
 
     // Add protobuf arguments as-is (using existing message_to_json_value)
     if let (Some(data), Some(descriptor)) = (job.data.as_ref(), args_descriptor) {
-        if let Ok(args_message) = ProtobufDescriptor::get_message_from_bytes(descriptor, &data.args) {
+        if let Ok(args_message) = ProtobufDescriptor::get_message_from_bytes(descriptor, &data.args)
+        {
             if let Ok(args_json) = ProtobufDescriptor::message_to_json_value(&args_message) {
                 job_json["arguments"] = args_json;
             }
@@ -106,7 +112,7 @@ pub fn job_to_json(
 fn format_timestamp(timestamp_ms: i64) -> String {
     let timestamp_secs = timestamp_ms / 1000;
     let nanosecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
-    
+
     match DateTime::from_timestamp(timestamp_secs, nanosecs) {
         Some(dt) => dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         None => "Invalid timestamp".to_string(),
@@ -120,13 +126,13 @@ mod tests {
     #[test]
     fn test_job_processing_status_formatter() {
         let formatter = JobProcessingStatusFormatter;
-        
+
         // Test table format
         assert_eq!(
             formatter.format(JobProcessingStatus::Running, &DisplayFormat::Table),
             "Running"
         );
-        
+
         // Test JSON format
         assert_eq!(
             formatter.format(JobProcessingStatus::Running, &DisplayFormat::Json),
@@ -137,13 +143,13 @@ mod tests {
     #[test]
     fn test_priority_formatter() {
         let formatter = PriorityFormatter;
-        
+
         // Test card format
         assert_eq!(
             formatter.format(Priority::High, &DisplayFormat::Card),
             "🔴 High"
         );
-        
+
         // Test JSON format
         assert_eq!(
             formatter.format(Priority::High, &DisplayFormat::Json),
@@ -157,7 +163,7 @@ mod tests {
         let timestamp = 1642680000000; // 2022-01-20T12:00:00.000Z
         let result = format_timestamp(timestamp);
         assert!(result.contains("2022-01-20T12:00:00"));
-        
+
         // Test zero timestamp
         let result = format_timestamp(0);
         assert_eq!(result, "1970-01-01T00:00:00.000Z");
@@ -165,10 +171,10 @@ mod tests {
 
     #[test]
     fn test_run_after_zero_handling() {
-        use crate::jobworkerp::data::{Job, JobData, JobId, Priority};
         use crate::display::DisplayFormat;
+        use crate::jobworkerp::data::{Job, JobData, JobId, Priority};
         use std::collections::HashMap;
-        
+
         // Create a job with run_after_time = 0
         let job = Job {
             id: Some(JobId { value: 123 }),
@@ -186,19 +192,19 @@ mod tests {
             }),
             metadata: HashMap::new(),
         };
-        
+
         let result = job_to_json(&job, None, None, &DisplayFormat::Json);
-        
+
         // run_after should be empty string when run_after_time is 0
         assert_eq!(result["run_after"], "");
     }
 
     #[test]
     fn test_run_after_non_zero_handling() {
-        use crate::jobworkerp::data::{Job, JobData, JobId, Priority};
         use crate::display::DisplayFormat;
+        use crate::jobworkerp::data::{Job, JobData, JobId, Priority};
         use std::collections::HashMap;
-        
+
         // Create a job with non-zero run_after_time
         let job = Job {
             id: Some(JobId { value: 123 }),
@@ -216,10 +222,13 @@ mod tests {
             }),
             metadata: HashMap::new(),
         };
-        
+
         let result = job_to_json(&job, None, None, &DisplayFormat::Json);
-        
+
         // run_after should be formatted timestamp when run_after_time is not 0
-        assert!(result["run_after"].as_str().unwrap().contains("2022-01-20T12:00:00"));
+        assert!(result["run_after"]
+            .as_str()
+            .unwrap()
+            .contains("2022-01-20T12:00:00"));
     }
 }
