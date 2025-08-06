@@ -136,7 +136,7 @@ pub fn function_result_to_json(
     });
 
     if let Some(status) = &result.status {
-        let status_value = *status as i32;
+        let status_value = *status;
         let status_result = crate::jobworkerp::data::ResultStatus::try_from(status_value)
             .unwrap_or(crate::jobworkerp::data::ResultStatus::OtherError);
 

@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-// TODO: Add necessary code as we use it
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("NotFound({0})")]

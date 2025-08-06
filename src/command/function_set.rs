@@ -165,7 +165,7 @@ impl FunctionSetCommand {
                         }
                     };
 
-                    println!("{}", output);
+                    println!("{output}");
                 } else {
                     println!("function set not found");
                 }
@@ -228,7 +228,7 @@ impl FunctionSetCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
                 println!(
                     "trailers: {:#?}",
                     data.trailers().await.unwrap().unwrap_or_default()

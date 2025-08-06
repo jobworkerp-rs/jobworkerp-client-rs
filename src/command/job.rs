@@ -380,14 +380,13 @@ impl JobCommand {
                     let mut hasher = DefaultHasher::default();
                     hasher.write_i64(datetime::now_millis());
                     hasher.write_i64(rand::random()); // random
-                                                      // create random worker name
                     let wname = format!("{}_{:x}", "JobworkerpCilentWorkflow", hasher.finish());
 
                     let worker_data = WorkerData {
                         name: wname.clone(),
                         runner_id: Some(rid),
                         runner_settings: vec![],
-                        retry_policy: None, // XXX
+                        retry_policy: None,
                         channel: channel.clone(),
                         queue_type: QueueType::Normal as i32,
                         response_type: ResponseType::Direct as i32,
@@ -574,7 +573,7 @@ impl JobCommand {
                                 if let Some(worker_id) = data.worker_id.as_ref() {
                                     JobworkerpProto::find_runner_descriptors_by_worker(
                                         client,
-                                        job_request::Worker::WorkerId(worker_id.clone()),
+                                        job_request::Worker::WorkerId(*worker_id),
                                     )
                                     .await
                                     .ok()
@@ -594,7 +593,7 @@ impl JobCommand {
                             break;
                         }
                         Err(e) => {
-                            eprintln!("Error reading from stream: {}", e);
+                            eprintln!("Error reading from stream: {e}");
                             break;
                         }
                     }
@@ -620,7 +619,7 @@ impl JobCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
             JobCommand::Delete { id } => {
                 let id = JobId { value: *id };
@@ -631,7 +630,7 @@ impl JobCommand {
                 let response = client
                     .job_client()
                     .await
-                    .count(CountCondition {}) // TODO
+                    .count(CountCondition {})
                     .await
                     .unwrap();
                 println!("{response:#?}");
@@ -669,7 +668,7 @@ impl JobCommand {
                                     if let Some(worker_id) = data.worker_id.as_ref() {
                                         JobworkerpProto::find_runner_descriptors_by_worker(
                                             client,
-                                            job_request::Worker::WorkerId(worker_id.clone()),
+                                            job_request::Worker::WorkerId(*worker_id),
                                         )
                                         .await
                                         .ok()
@@ -691,7 +690,7 @@ impl JobCommand {
                             break;
                         }
                         Err(e) => {
-                            eprintln!("Error reading from stream: {}", e);
+                            eprintln!("Error reading from stream: {e}");
                             break;
                         }
                     }
@@ -717,7 +716,7 @@ impl JobCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
         }
         async fn print_job_with_request(
