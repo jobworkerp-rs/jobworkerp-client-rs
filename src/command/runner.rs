@@ -193,7 +193,7 @@ impl RunnerCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
             RunnerCommand::Delete { id } => {
                 let id = RunnerId { value: *id };
@@ -239,7 +239,7 @@ impl RunnerCommand {
             }
         };
 
-        println!("{}", output);
+        println!("{output}");
     }
 
     pub fn print_runner(runner: &Runner) {

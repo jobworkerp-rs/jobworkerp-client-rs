@@ -315,7 +315,7 @@ impl WorkerCommand {
                         if let Some(runner_id) = &wdata.runner_id {
                             JobworkerpProto::find_worker_runner_settings_descriptors(
                                 client,
-                                runner_id.clone(),
+                                *runner_id,
                             )
                             .await
                             .ok()
@@ -351,7 +351,7 @@ impl WorkerCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
             WorkerCommand::Update {
                 id,
@@ -383,7 +383,6 @@ impl WorkerCommand {
                     worker_data.runner_id = runner_id
                         .map(|s| RunnerId { value: s })
                         .or(worker_data.runner_id);
-                    // TODO runner_settings is json string and should be transformed to grpc message bytes.(use runner_settings_proto from runner)
                     worker_data.runner_settings = settings
                         .clone()
                         .map(|o| o.bytes().collect())
@@ -404,7 +403,7 @@ impl WorkerCommand {
                     worker_data.use_static = use_static.unwrap_or(worker_data.use_static);
                     worker_data.broadcast_results =
                         broadcast_results.unwrap_or(worker_data.broadcast_results);
-                    // worker_data.retry_policy = worker_data.retry_policy; //TODO
+                    // worker_data.retry_policy = worker_data.retry_policy;
                     let response = client
                         .worker_client()
                         .await
@@ -456,7 +455,7 @@ impl WorkerCommand {
                 if let Some(runner_id) = &wdata.runner_id {
                     JobworkerpProto::find_worker_runner_settings_descriptors(
                         client,
-                        runner_id.clone(),
+                        *runner_id,
                     )
                     .await
                     .ok()
@@ -491,7 +490,7 @@ impl WorkerCommand {
                 }
             };
 
-            println!("{}", output);
+            println!("{output}");
             Ok(())
         }
 

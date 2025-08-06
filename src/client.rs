@@ -33,7 +33,6 @@ impl JobworkerpClient {
         })
     }
     pub async fn init_grpc_connection(&self) -> Result<()> {
-        // TODO create new conection only when connection test failed
         self.connection.reconnect().await
     }
     pub async fn runner_client(&self) -> RunnerServiceClient<tonic::transport::Channel> {

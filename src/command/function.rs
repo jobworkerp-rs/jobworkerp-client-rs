@@ -142,7 +142,7 @@ impl FunctionCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
 
                 println!(
                     "trailer: {:#?}",
@@ -198,7 +198,7 @@ impl FunctionCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
 
                 println!(
                     "trailer: {:#?}",
@@ -224,7 +224,6 @@ impl FunctionCommand {
                 // Determine which name to use (priority: function_name, runner_name, worker_name)
                 let name_type = if let Some(fname) = function_name {
                     // For function_name, we default to treating it as a worker name
-                    // TODO: We could enhance this by first checking if it's a runner or worker
                     Some(function_call_request::Name::WorkerName(fname.clone()))
                 } else if let Some(rname) = runner_name {
                     Some(function_call_request::Name::RunnerName(rname.clone()))

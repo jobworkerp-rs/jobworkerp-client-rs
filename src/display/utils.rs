@@ -26,11 +26,7 @@ pub fn format_json_hierarchy(
     max_field_length: Option<usize>,
     use_unicode: bool,
 ) -> String {
-    let indent = if use_unicode {
-        "  ".repeat(indent_level)
-    } else {
-        "  ".repeat(indent_level)
-    };
+    let indent = "  ".repeat(indent_level);
 
     let child_indent = indent_level + 1;
 
@@ -50,13 +46,13 @@ pub fn format_json_hierarchy(
             for (i, item) in arr.iter().enumerate() {
                 let formatted_item =
                     format_json_hierarchy(item, child_indent, max_field_length, use_unicode);
-                result.push_str(&format!("{}  {}", indent, formatted_item));
+                result.push_str(&format!("{indent}  {formatted_item}"));
                 if i < arr.len() - 1 {
                     result.push(',');
                 }
                 result.push('\n');
             }
-            result.push_str(&format!("{}]", indent));
+            result.push_str(&format!("{indent}]"));
             result
         }
         JsonValue::Object(obj) => {
@@ -69,13 +65,13 @@ pub fn format_json_hierarchy(
             for (i, (key, value)) in entries.iter().enumerate() {
                 let formatted_value =
                     format_json_hierarchy(value, child_indent, max_field_length, use_unicode);
-                result.push_str(&format!("{}  \"{}\": {}", indent, key, formatted_value));
+                result.push_str(&format!("{indent}  \"{key}\": {formatted_value}"));
                 if i < entries.len() - 1 {
                     result.push(',');
                 }
                 result.push('\n');
             }
-            result.push_str(&format!("{}}}", indent));
+            result.push_str(&format!("{indent}}}"));
             result
         }
     }
@@ -91,7 +87,7 @@ pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, S
                 let full_key = if prefix.is_empty() {
                     key.clone()
                 } else {
-                    format!("{}.{}", prefix, key)
+                    format!("{prefix}.{key}")
                 };
 
                 match val {
@@ -106,7 +102,7 @@ pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, S
         }
         JsonValue::Array(arr) => {
             for (i, item) in arr.iter().enumerate() {
-                let indexed_key = format!("{}[{}]", prefix, i);
+                let indexed_key = format!("{prefix}[{i}]");
                 match item {
                     JsonValue::Object(_) | JsonValue::Array(_) => {
                         result.extend(flatten_json_for_table(item, &indexed_key));
