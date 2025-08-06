@@ -59,7 +59,7 @@ pub fn format_duration(start_millis: i64, end_millis: i64, format: &DisplayForma
             if end_millis > start_millis {
                 let duration_ms = end_millis - start_millis;
                 if duration_ms < 1000 {
-                    format!("{}ms", duration_ms)
+                    format!("{duration_ms}ms")
                 } else {
                     format!("{:.2}s", duration_ms as f64 / 1000.0)
                 }

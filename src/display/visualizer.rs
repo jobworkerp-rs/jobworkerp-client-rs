@@ -134,7 +134,7 @@ impl JsonVisualizer for CardVisualizer {
             } else {
                 result.push_str(&header);
             }
-            result.push_str("\n");
+            result.push('\n');
 
             // Format as hierarchical structure
             let formatted = format_json_hierarchy(
@@ -147,7 +147,7 @@ impl JsonVisualizer for CardVisualizer {
             // Add bullets to each line
             for line in formatted.lines() {
                 if !line.trim().is_empty() {
-                    result.push_str(&format!("{}{}\n", bullet, line));
+                    result.push_str(&format!("{bullet}{line}\n"));
                 }
             }
         }
@@ -347,22 +347,14 @@ fn expand_arguments_fields(data: &[JsonValue]) -> Vec<JsonValue> {
                 let mut expanded = obj.clone();
 
                 // If arguments field exists, expand it based on its type
-                if let Some(args_value) = obj.get("arguments") {
-                    match args_value {
-                        JsonValue::Object(args_obj) => {
-                            // Remove the original arguments field
-                            expanded.remove("arguments");
+                if let Some(JsonValue::Object(args_obj)) = obj.get("arguments") {
+                    // Remove the original arguments field
+                    expanded.remove("arguments");
 
-                            // Add each argument field with "arg_" prefix
-                            for (key, value) in args_obj {
-                                let prefixed_key = format!("arg_{}", key);
-                                expanded.insert(prefixed_key, value.clone());
-                            }
-                        }
-                        _ => {
-                            // For non-object arguments, keep as is but expand in display
-                            // The arguments field will be handled by the display formatter
-                        }
+                    // Add each argument field with "arg_" prefix
+                    for (key, value) in args_obj {
+                        let prefixed_key = format!("arg_{key}");
+                        expanded.insert(prefixed_key, value.clone());
                     }
                 }
 
@@ -539,9 +531,7 @@ fn apply_cell_color(cell: Cell, value: &JsonValue) -> Cell {
                 cell.fg(comfy_table::Color::Yellow)
             } else if s.contains("Wait") {
                 cell.fg(comfy_table::Color::Blue)
-            } else if s.contains("Cancel") {
-                cell.fg(comfy_table::Color::Red)
-            } else if s.contains("High") {
+            } else if s.contains("Cancel") || s.contains("High") {
                 cell.fg(comfy_table::Color::Red)
             } else if s.contains("Medium") {
                 cell.fg(comfy_table::Color::Yellow)
@@ -667,6 +657,12 @@ mod tests {
 }
 
 /// StreamingTableVisualizer implementation  
+impl Default for StreamingTableVisualizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamingTableVisualizer {
     pub fn new() -> Self {
         Self
@@ -675,11 +671,11 @@ impl StreamingTableVisualizer {
 
 impl StreamingVisualizer for StreamingTableVisualizer {
     fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
-        let start_msg = format!("🔄 Streaming {} results in table format...", stream_type);
+        let start_msg = format!("🔄 Streaming {stream_type} results in table format...");
         if options.color_enabled {
             println!("{}", color::colorize_text(&start_msg, "cyan", true));
         } else {
-            println!("{}", start_msg);
+            println!("{start_msg}");
         }
         println!(); // Add blank line for readability
     }
@@ -695,19 +691,19 @@ impl StreamingVisualizer for StreamingTableVisualizer {
         if options.color_enabled {
             println!("{}", color::colorize_text(&result_header, "blue", true));
         } else {
-            println!("{}", result_header);
+            println!("{result_header}");
         }
 
-        println!("{}", table_output);
+        println!("{table_output}");
         println!(); // Add blank line between results
     }
 
     fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
-        let end_msg = format!("✅ Table streaming completed ({} results)", total_count);
+        let end_msg = format!("✅ Table streaming completed ({total_count} results)");
         if options.color_enabled {
             println!("{}", color::colorize_text(&end_msg, "green", true));
         } else {
-            println!("{}", end_msg);
+            println!("{end_msg}");
         }
     }
 }
@@ -715,11 +711,11 @@ impl StreamingVisualizer for StreamingTableVisualizer {
 /// StreamingCardVisualizer implementation
 impl StreamingVisualizer for StreamingCardVisualizer {
     fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
-        let start_msg = format!("🔄 Streaming {} results...", stream_type);
+        let start_msg = format!("🔄 Streaming {stream_type} results...");
         if options.color_enabled {
             println!("{}", color::colorize_text(&start_msg, "cyan", true));
         } else {
-            println!("{}", start_msg);
+            println!("{start_msg}");
         }
     }
 
@@ -754,7 +750,7 @@ impl StreamingVisualizer for StreamingCardVisualizer {
         // Print content with borders
         for line in formatted.lines() {
             if !line.trim().is_empty() {
-                let padded_line = format!(" {}", line);
+                let padded_line = format!(" {line}");
                 let padding_needed = border_width.saturating_sub(padded_line.chars().count() + 1);
                 println!(
                     "{}{}{} {}",
@@ -772,11 +768,11 @@ impl StreamingVisualizer for StreamingCardVisualizer {
     }
 
     fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
-        let end_msg = format!("✅ Stream completed ({} results received)", total_count);
+        let end_msg = format!("✅ Stream completed ({total_count} results received)");
         if options.color_enabled {
             println!("{}", color::colorize_text(&end_msg, "green", true));
         } else {
-            println!("{}", end_msg);
+            println!("{end_msg}");
         }
     }
 }
@@ -789,7 +785,7 @@ impl StreamingVisualizer for StreamingJsonVisualizer {
 
     fn render_item(&self, item: &JsonValue, _index: usize, _options: &DisplayOptions) {
         match serde_json::to_string_pretty(item) {
-            Ok(json) => println!("{}", json),
+            Ok(json) => println!("{json}"),
             Err(_) => println!("Invalid JSON"),
         }
         println!(); // Empty line between items

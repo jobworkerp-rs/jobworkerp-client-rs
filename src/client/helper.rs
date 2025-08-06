@@ -132,9 +132,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     name: name_owned.clone(),
                 }),
                 move |request| async move {
-                    // TODO memory cache
                     let mut runner_client = client_clone.runner_client().await;
-                    // TODO find by name
                     let res = runner_client
                         .find_by_name(to_request(&metadata, request)?)
                         .await
@@ -684,7 +682,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             )
                         });
                     // use worker one-time
-                    // XXX use_static means static worker in jobworkerp, not in workflow (but use as a temporary worker or not)
                     if !wdata.use_static {
                         let deleted = self
                             .jobworkerp_client()

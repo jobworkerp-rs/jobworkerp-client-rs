@@ -280,7 +280,7 @@ impl JobResultCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
             JobResultCommand::ListByJobId {
                 job_id,
@@ -338,7 +338,7 @@ impl JobResultCommand {
                     }
                 };
 
-                println!("{}", output);
+                println!("{output}");
             }
             JobResultCommand::Delete { id } => {
                 let id = JobResultId { value: *id };
@@ -354,7 +354,7 @@ impl JobResultCommand {
                 let response = client
                     .job_result_client()
                     .await
-                    .count(to_request(metadata, CountCondition {}).unwrap()) // TODO
+                    .count(to_request(metadata, CountCondition {}).unwrap())
                     .await
                     .unwrap();
                 println!("{response:#?}");
@@ -405,7 +405,7 @@ impl JobResultCommand {
             }
         };
 
-        println!("{}", output);
+        println!("{output}");
     }
 
     pub fn print_job_result_output(data: &[u8], result_proto: Option<MessageDescriptor>) {
@@ -491,7 +491,7 @@ impl JobResultCommand {
                 // For table format, we collect items in a static visualizer
                 static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> =
                     std::sync::OnceLock::new();
-                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                let visualizer = TABLE_VISUALIZER.get_or_init(StreamingTableVisualizer::new);
                 visualizer.render_item(&json_item, item_index, options);
             }
             crate::display::DisplayFormat::Card => {
@@ -523,7 +523,7 @@ impl JobResultCommand {
             crate::display::DisplayFormat::Table => {
                 static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> =
                     std::sync::OnceLock::new();
-                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                let visualizer = TABLE_VISUALIZER.get_or_init(StreamingTableVisualizer::new);
                 visualizer.start_stream(stream_type, options);
             }
             crate::display::DisplayFormat::Card => {
@@ -550,7 +550,7 @@ impl JobResultCommand {
             crate::display::DisplayFormat::Table => {
                 static TABLE_VISUALIZER: std::sync::OnceLock<StreamingTableVisualizer> =
                     std::sync::OnceLock::new();
-                let visualizer = TABLE_VISUALIZER.get_or_init(|| StreamingTableVisualizer::new());
+                let visualizer = TABLE_VISUALIZER.get_or_init(StreamingTableVisualizer::new);
                 visualizer.end_stream(total_count, options);
             }
             crate::display::DisplayFormat::Card => {
