@@ -100,19 +100,10 @@ impl JobworkerpProto {
         json_value: &serde_json::Value,
         ignore_unknown_fields: bool,
     ) -> Result<Vec<u8>> {
-        let dynamic_message = if ignore_unknown_fields {
-            let options = DeserializeOptions::new().deny_unknown_fields(false);
-            DynamicMessage::deserialize_with_options(descriptor, json_value, &options)
-        } else {
-            DynamicMessage::deserialize(descriptor, json_value)
-        }?;
-        Ok(dynamic_message.encode_to_vec())
+        ProtobufDescriptor::json_value_to_message(descriptor, json_value, ignore_unknown_fields)
     }
     pub fn json_to_message(descriptor: MessageDescriptor, json_str: &str) -> Result<Vec<u8>> {
-        let mut deserializer = Deserializer::from_str(json_str);
-        let dynamic_message = DynamicMessage::deserialize(descriptor, &mut deserializer)?;
-        deserializer.end()?;
-        Ok(dynamic_message.encode_to_vec())
+        ProtobufDescriptor::json_to_message(descriptor, json_str)
     }
     pub fn parse_runner_settings_schema_descriptor(
         runner_data: &RunnerData,
