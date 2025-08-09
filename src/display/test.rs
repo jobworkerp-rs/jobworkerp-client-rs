@@ -7,7 +7,7 @@ mod tests {
     #[test]
     fn test_json_format_disables_colors_automatically() {
         let options = DisplayOptions::new(DisplayFormat::Json);
-        assert_eq!(options.color_enabled, false);
+        assert!(!options.color_enabled);
         assert_eq!(options.format, DisplayFormat::Json);
     }
 
@@ -16,15 +16,15 @@ mod tests {
         let options = DisplayOptions::new(DisplayFormat::Json).with_color(true); // Try to force colors on
 
         // Should still be false for JSON format
-        assert_eq!(options.color_enabled, false);
+        assert!(!options.color_enabled);
     }
 
     #[test]
     fn test_other_formats_respect_color_setting() {
         let table_options = DisplayOptions::new(DisplayFormat::Table).with_color(false);
-        assert_eq!(table_options.color_enabled, false);
+        assert!(!table_options.color_enabled);
 
         let card_options = DisplayOptions::new(DisplayFormat::Card).with_color(true);
-        assert_eq!(card_options.color_enabled, true);
+        assert!(card_options.color_enabled);
     }
 }

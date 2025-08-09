@@ -314,8 +314,7 @@ impl WorkerCommand {
                     let settings_descriptor = if let Some(wdata) = &worker.data {
                         if let Some(runner_id) = &wdata.runner_id {
                             JobworkerpProto::find_worker_runner_settings_descriptors(
-                                client,
-                                *runner_id,
+                                client, *runner_id,
                             )
                             .await
                             .ok()
@@ -453,13 +452,10 @@ impl WorkerCommand {
             // Get settings descriptor for proper display
             let settings_descriptor = if let Some(wdata) = &worker.data {
                 if let Some(runner_id) = &wdata.runner_id {
-                    JobworkerpProto::find_worker_runner_settings_descriptors(
-                        client,
-                        *runner_id,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
+                    JobworkerpProto::find_worker_runner_settings_descriptors(client, *runner_id)
+                        .await
+                        .ok()
+                        .flatten()
                 } else {
                     None
                 }

@@ -137,12 +137,7 @@ impl JsonVisualizer for CardVisualizer {
             result.push('\n');
 
             // Format as hierarchical structure
-            let formatted = format_json_hierarchy(
-                json_obj,
-                0,
-                options.effective_max_length(),
-                options.use_unicode,
-            );
+            let formatted = format_json_hierarchy(json_obj, 0, options.effective_max_length());
 
             // Add bullets to each line
             for line in formatted.lines() {
@@ -545,6 +540,145 @@ fn apply_cell_color(cell: Cell, value: &JsonValue) -> Cell {
     }
 }
 
+/// StreamingTableVisualizer implementation  
+impl Default for StreamingTableVisualizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamingTableVisualizer {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl StreamingVisualizer for StreamingTableVisualizer {
+    fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
+        let start_msg = format!("🔄 Streaming {stream_type} results in table format...");
+        if options.color_enabled {
+            println!("{}", color::colorize_text(&start_msg, "cyan", true));
+        } else {
+            println!("{start_msg}");
+        }
+        println!(); // Add blank line for readability
+    }
+
+    fn render_item(&self, item: &JsonValue, index: usize, options: &DisplayOptions) {
+        // Create a single-item table for each result
+        let table_visualizer = TableVisualizer;
+        let single_item = vec![item.clone()];
+        let table_output = table_visualizer.visualize(&single_item, options);
+
+        // Add a header for each result
+        let result_header = format!("Result #{}", index + 1);
+        if options.color_enabled {
+            println!("{}", color::colorize_text(&result_header, "blue", true));
+        } else {
+            println!("{result_header}");
+        }
+
+        println!("{table_output}");
+        println!(); // Add blank line between results
+    }
+
+    fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
+        let end_msg = format!("✅ Table streaming completed ({total_count} results)");
+        if options.color_enabled {
+            println!("{}", color::colorize_text(&end_msg, "green", true));
+        } else {
+            println!("{end_msg}");
+        }
+    }
+}
+
+/// StreamingCardVisualizer implementation
+impl StreamingVisualizer for StreamingCardVisualizer {
+    fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
+        let start_msg = format!("🔄 Streaming {stream_type} results...");
+        if options.color_enabled {
+            println!("{}", color::colorize_text(&start_msg, "cyan", true));
+        } else {
+            println!("{start_msg}");
+        }
+    }
+
+    fn render_item(&self, item: &JsonValue, index: usize, options: &DisplayOptions) {
+        let border = if options.use_unicode { "─" } else { "-" };
+        let corner_tl = if options.use_unicode { "╭" } else { "+" };
+        let corner_tr = if options.use_unicode { "╮" } else { "+" };
+        let corner_bl = if options.use_unicode { "╰" } else { "+" };
+        let corner_br = if options.use_unicode { "╯" } else { "+" };
+        let vertical = if options.use_unicode { "│" } else { "|" };
+
+        let title = format!(" Result #{} ", index + 1);
+        let border_width: usize = 60;
+        let title_padding = border_width.saturating_sub(title.len() + 2);
+        let left_padding = title_padding / 2;
+        let right_padding = title_padding - left_padding;
+
+        // Top border with title
+        println!(
+            "{}{}{}{}{}",
+            corner_tl,
+            border.repeat(left_padding),
+            title,
+            border.repeat(right_padding),
+            corner_tr
+        );
+
+        // Format content hierarchically
+        let formatted = format_json_hierarchy(item, 0, options.effective_max_length());
+
+        // Print content with borders
+        for line in formatted.lines() {
+            if !line.trim().is_empty() {
+                let padded_line = format!(" {line}");
+                let padding_needed = border_width.saturating_sub(padded_line.chars().count() + 1);
+                println!(
+                    "{}{}{} {}",
+                    vertical,
+                    padded_line,
+                    " ".repeat(padding_needed),
+                    vertical
+                );
+            }
+        }
+
+        // Bottom border
+        println!("{}{}{}", corner_bl, border.repeat(border_width), corner_br);
+        println!(); // Empty line between items
+    }
+
+    fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
+        let end_msg = format!("✅ Stream completed ({total_count} results received)");
+        if options.color_enabled {
+            println!("{}", color::colorize_text(&end_msg, "green", true));
+        } else {
+            println!("{end_msg}");
+        }
+    }
+}
+
+/// StreamingJsonVisualizer implementation
+impl StreamingVisualizer for StreamingJsonVisualizer {
+    fn start_stream(&self, _stream_type: &str, _options: &DisplayOptions) {
+        // JSON streaming doesn't need a start message
+    }
+
+    fn render_item(&self, item: &JsonValue, _index: usize, _options: &DisplayOptions) {
+        match serde_json::to_string_pretty(item) {
+            Ok(json) => println!("{json}"),
+            Err(_) => println!("Invalid JSON"),
+        }
+        println!(); // Empty line between items
+    }
+
+    fn end_stream(&self, _total_count: usize, _options: &DisplayOptions) {
+        // JSON streaming doesn't need an end message
+    }
+}
+
 // // /// Format cell value for truncated text with proper coloring
 // // #[allow(dead_code)]
 // fn format_cell_value_for_truncated(value: &JsonValue, options: &DisplayOptions, truncated_text: &str) -> String {
@@ -654,144 +788,4 @@ mod tests {
     //     assert_eq!(format_cell_value(&json!(42), &options), "42");
     //     assert_eq!(format_cell_value(&json!("test"), &options), "test");
     // }
-}
-
-/// StreamingTableVisualizer implementation  
-impl Default for StreamingTableVisualizer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl StreamingTableVisualizer {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl StreamingVisualizer for StreamingTableVisualizer {
-    fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
-        let start_msg = format!("🔄 Streaming {stream_type} results in table format...");
-        if options.color_enabled {
-            println!("{}", color::colorize_text(&start_msg, "cyan", true));
-        } else {
-            println!("{start_msg}");
-        }
-        println!(); // Add blank line for readability
-    }
-
-    fn render_item(&self, item: &JsonValue, index: usize, options: &DisplayOptions) {
-        // Create a single-item table for each result
-        let table_visualizer = TableVisualizer;
-        let single_item = vec![item.clone()];
-        let table_output = table_visualizer.visualize(&single_item, options);
-
-        // Add a header for each result
-        let result_header = format!("Result #{}", index + 1);
-        if options.color_enabled {
-            println!("{}", color::colorize_text(&result_header, "blue", true));
-        } else {
-            println!("{result_header}");
-        }
-
-        println!("{table_output}");
-        println!(); // Add blank line between results
-    }
-
-    fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
-        let end_msg = format!("✅ Table streaming completed ({total_count} results)");
-        if options.color_enabled {
-            println!("{}", color::colorize_text(&end_msg, "green", true));
-        } else {
-            println!("{end_msg}");
-        }
-    }
-}
-
-/// StreamingCardVisualizer implementation
-impl StreamingVisualizer for StreamingCardVisualizer {
-    fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
-        let start_msg = format!("🔄 Streaming {stream_type} results...");
-        if options.color_enabled {
-            println!("{}", color::colorize_text(&start_msg, "cyan", true));
-        } else {
-            println!("{start_msg}");
-        }
-    }
-
-    fn render_item(&self, item: &JsonValue, index: usize, options: &DisplayOptions) {
-        let border = if options.use_unicode { "─" } else { "-" };
-        let corner_tl = if options.use_unicode { "╭" } else { "+" };
-        let corner_tr = if options.use_unicode { "╮" } else { "+" };
-        let corner_bl = if options.use_unicode { "╰" } else { "+" };
-        let corner_br = if options.use_unicode { "╯" } else { "+" };
-        let vertical = if options.use_unicode { "│" } else { "|" };
-
-        let title = format!(" Result #{} ", index + 1);
-        let border_width: usize = 60;
-        let title_padding = border_width.saturating_sub(title.len() + 2);
-        let left_padding = title_padding / 2;
-        let right_padding = title_padding - left_padding;
-
-        // Top border with title
-        println!(
-            "{}{}{}{}{}",
-            corner_tl,
-            border.repeat(left_padding),
-            title,
-            border.repeat(right_padding),
-            corner_tr
-        );
-
-        // Format content hierarchically
-        let formatted =
-            format_json_hierarchy(item, 0, options.effective_max_length(), options.use_unicode);
-
-        // Print content with borders
-        for line in formatted.lines() {
-            if !line.trim().is_empty() {
-                let padded_line = format!(" {line}");
-                let padding_needed = border_width.saturating_sub(padded_line.chars().count() + 1);
-                println!(
-                    "{}{}{} {}",
-                    vertical,
-                    padded_line,
-                    " ".repeat(padding_needed),
-                    vertical
-                );
-            }
-        }
-
-        // Bottom border
-        println!("{}{}{}", corner_bl, border.repeat(border_width), corner_br);
-        println!(); // Empty line between items
-    }
-
-    fn end_stream(&self, total_count: usize, options: &DisplayOptions) {
-        let end_msg = format!("✅ Stream completed ({total_count} results received)");
-        if options.color_enabled {
-            println!("{}", color::colorize_text(&end_msg, "green", true));
-        } else {
-            println!("{end_msg}");
-        }
-    }
-}
-
-/// StreamingJsonVisualizer implementation
-impl StreamingVisualizer for StreamingJsonVisualizer {
-    fn start_stream(&self, _stream_type: &str, _options: &DisplayOptions) {
-        // JSON streaming doesn't need a start message
-    }
-
-    fn render_item(&self, item: &JsonValue, _index: usize, _options: &DisplayOptions) {
-        match serde_json::to_string_pretty(item) {
-            Ok(json) => println!("{json}"),
-            Err(_) => println!("Invalid JSON"),
-        }
-        println!(); // Empty line between items
-    }
-
-    fn end_stream(&self, _total_count: usize, _options: &DisplayOptions) {
-        // JSON streaming doesn't need an end message
-    }
 }
