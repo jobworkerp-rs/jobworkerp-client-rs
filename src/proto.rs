@@ -9,9 +9,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use command_utils::protobuf::ProtobufDescriptor;
-use prost::Message;
-use prost_reflect::{DeserializeOptions, DynamicMessage, MessageDescriptor};
-use serde_json::Deserializer;
+use prost_reflect::MessageDescriptor;
 
 pub struct JobworkerpProto {}
 
