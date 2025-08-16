@@ -109,7 +109,7 @@ impl JsonVisualizer for TableVisualizer {
     }
 }
 
-/// Card format visualizer with detailed individual entries  
+/// Card format visualizer with detailed individual entries
 pub struct CardVisualizer;
 
 impl JsonVisualizer for CardVisualizer {
@@ -160,7 +160,7 @@ pub struct StreamingTableVisualizer;
 /// Streaming card format visualizer
 pub struct StreamingCardVisualizer;
 
-/// Streaming JSON format visualizer  
+/// Streaming JSON format visualizer
 pub struct StreamingJsonVisualizer;
 
 impl JsonVisualizer for JsonPrettyVisualizer {
@@ -540,7 +540,7 @@ fn apply_cell_color(cell: Cell, value: &JsonValue) -> Cell {
     }
 }
 
-/// StreamingTableVisualizer implementation  
+/// StreamingTableVisualizer implementation
 impl Default for StreamingTableVisualizer {
     fn default() -> Self {
         Self::new()
