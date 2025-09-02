@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use crate::{
     client::JobworkerpClient,
     command::to_request,
-    jobworkerp::data::RetryPolicy,
+    jobworkerp::data::{RetryPolicy, RunnerId, WorkerId},
     jobworkerp::function::{
         data::{
             function_specs, FunctionCallOptions, FunctionResult, FunctionSchema, FunctionSpecs,
             McpToolList, WorkerOptions,
         },
         service::{
-            function_call_request, FindFunctionRequest, FindFunctionSetRequest,
-            FunctionCallRequest, RunnerParameters,
+            function_call_request, FindFunctionByIdRequest, FindFunctionByNameRequest,
+            FindFunctionRequest, FindFunctionSetRequest, FunctionCallRequest, RunnerParameters,
         },
     },
 };
@@ -83,6 +83,26 @@ pub enum FunctionCommand {
         use_static: bool,
         #[clap(long)]
         broadcast_results: bool,
+    },
+    Find {
+        #[clap(short = 'r', long)]
+        runner_id: Option<i64>,
+        #[clap(short = 'w', long)]
+        worker_id: Option<i64>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
+    },
+    FindByName {
+        #[clap(short = 'r', long)]
+        runner_name: Option<String>,
+        #[clap(short = 'w', long)]
+        worker_name: Option<String>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
     },
 }
 
@@ -296,6 +316,172 @@ impl FunctionCommand {
                     "trailer: {:#?}",
                     result_stream.trailers().await.unwrap().unwrap_or_default()
                 );
+            }
+            FunctionCommand::Find {
+                runner_id,
+                worker_id,
+                format,
+                no_truncate,
+            } => {
+                // Validation: exactly one of runner_id or worker_id must be specified
+                if runner_id.is_some() && worker_id.is_some() {
+                    eprintln!("Error: Only one of --runner-id or --worker-id can be specified");
+                    return;
+                }
+                if runner_id.is_none() && worker_id.is_none() {
+                    eprintln!("Error: Either --runner-id or --worker-id must be specified");
+                    return;
+                }
+
+                use crate::jobworkerp::function::service::find_function_by_id_request;
+
+                // Build request based on which ID is provided
+                let request = if let Some(runner_id) = runner_id {
+                    FindFunctionByIdRequest {
+                        id: Some(find_function_by_id_request::Id::RunnerId(RunnerId {
+                            value: *runner_id,
+                        })),
+                    }
+                } else if let Some(worker_id) = worker_id {
+                    FindFunctionByIdRequest {
+                        id: Some(find_function_by_id_request::Id::WorkerId(WorkerId {
+                            value: *worker_id,
+                        })),
+                    }
+                } else {
+                    unreachable!("Validation should have caught this case")
+                };
+
+                // Make the gRPC call
+                let response = client
+                    .function_client()
+                    .await
+                    .find(to_request(metadata, request).unwrap())
+                    .await
+                    .unwrap();
+
+                let function_specs = response.into_inner().data;
+
+                match function_specs {
+                    Some(specs) => {
+                        use self::display::function_to_json;
+                        use crate::display::{
+                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer, DisplayOptions,
+                            JsonPrettyVisualizer, TableVisualizer,
+                        };
+
+                        // Convert to JSON and display
+                        let function_json = function_to_json(&specs, format);
+                        let functions_vec = vec![function_json];
+
+                        let options = DisplayOptions::new(format.clone())
+                            .with_color(supports_color())
+                            .with_no_truncate(*no_truncate);
+
+                        let output = match format {
+                            crate::display::DisplayFormat::Table => {
+                                let visualizer = TableVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                            crate::display::DisplayFormat::Card => {
+                                let visualizer = CardVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                            crate::display::DisplayFormat::Json => {
+                                let visualizer = JsonPrettyVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                        };
+
+                        println!("{output}");
+                    }
+                    None => {
+                        println!("Function not found");
+                    }
+                }
+            }
+            FunctionCommand::FindByName {
+                runner_name,
+                worker_name,
+                format,
+                no_truncate,
+            } => {
+                // Validation: exactly one of runner_name or worker_name must be specified
+                if runner_name.is_some() && worker_name.is_some() {
+                    eprintln!("Error: Only one of --runner-name or --worker-name can be specified");
+                    return;
+                }
+                if runner_name.is_none() && worker_name.is_none() {
+                    eprintln!("Error: Either --runner-name or --worker-name must be specified");
+                    return;
+                }
+
+                use crate::jobworkerp::function::service::find_function_by_name_request;
+
+                // Build request based on which name is provided
+                let request = if let Some(runner_name) = runner_name {
+                    FindFunctionByNameRequest {
+                        name: Some(find_function_by_name_request::Name::RunnerName(
+                            runner_name.clone(),
+                        )),
+                    }
+                } else if let Some(worker_name) = worker_name {
+                    FindFunctionByNameRequest {
+                        name: Some(find_function_by_name_request::Name::WorkerName(
+                            worker_name.clone(),
+                        )),
+                    }
+                } else {
+                    unreachable!("Validation should have caught this case")
+                };
+
+                // Make the gRPC call
+                let response = client
+                    .function_client()
+                    .await
+                    .find_by_name(to_request(metadata, request).unwrap())
+                    .await
+                    .unwrap();
+
+                let function_specs = response.into_inner().data;
+
+                match function_specs {
+                    Some(specs) => {
+                        use self::display::function_to_json;
+                        use crate::display::{
+                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer, DisplayOptions,
+                            JsonPrettyVisualizer, TableVisualizer,
+                        };
+
+                        // Convert to JSON and display
+                        let function_json = function_to_json(&specs, format);
+                        let functions_vec = vec![function_json];
+
+                        let options = DisplayOptions::new(format.clone())
+                            .with_color(supports_color())
+                            .with_no_truncate(*no_truncate);
+
+                        let output = match format {
+                            crate::display::DisplayFormat::Table => {
+                                let visualizer = TableVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                            crate::display::DisplayFormat::Card => {
+                                let visualizer = CardVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                            crate::display::DisplayFormat::Json => {
+                                let visualizer = JsonPrettyVisualizer;
+                                visualizer.visualize(&functions_vec, &options)
+                            }
+                        };
+
+                        println!("{output}");
+                    }
+                    None => {
+                        println!("Function not found");
+                    }
+                }
             }
         }
     }
