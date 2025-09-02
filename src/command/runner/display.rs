@@ -26,6 +26,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::LlmCompletion => "LLM_COMPLETION",
                 RunnerType::InlineWorkflow => "INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "REUSABLE_WORKFLOW",
+                RunnerType::CreateWorkflow => "CREATE_WORKFLOW",
             }
             .to_string(),
             DisplayFormat::Card => match runner_type {
@@ -41,6 +42,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::LlmCompletion => "📝 LLM_COMPLETION",
                 RunnerType::InlineWorkflow => "🔄 INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "🔄 REUSABLE_WORKFLOW",
+                RunnerType::CreateWorkflow => "🔄 CREATE_WORKFLOW",
             }
             .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
