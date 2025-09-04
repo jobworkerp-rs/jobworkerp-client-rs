@@ -15,7 +15,7 @@ use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::util::datetime;
 use command_utils::util::scoped_cache::ScopedCache;
-use net_utils::trace::Tracing;
+use command_utils::trace::Tracing;
 use rand;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
