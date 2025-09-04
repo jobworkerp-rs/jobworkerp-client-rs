@@ -1,7 +1,7 @@
 use super::helper::UseJobworkerpClientHelper;
 use crate::client::{JobworkerpClient, UseJobworkerpClient};
 use anyhow::Result;
-use net_utils::trace::Tracing;
+use command_utils::trace::Tracing;
 use std::time::Duration;
 
 // jobworker client wrapper
