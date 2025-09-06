@@ -38,8 +38,8 @@ use crate::{
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
-use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 use command_utils::trace::Tracing;
+use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 use opentelemetry::{global, trace::Span, Context};
 use prost::Message;
 

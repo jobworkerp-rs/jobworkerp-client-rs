@@ -366,8 +366,8 @@ impl FunctionCommand {
                     Some(specs) => {
                         use self::display::function_to_json;
                         use crate::display::{
-                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer, DisplayOptions,
-                            JsonPrettyVisualizer, TableVisualizer,
+                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer,
+                            DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
                         };
 
                         // Convert to JSON and display
@@ -449,8 +449,8 @@ impl FunctionCommand {
                     Some(specs) => {
                         use self::display::function_to_json;
                         use crate::display::{
-                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer, DisplayOptions,
-                            JsonPrettyVisualizer, TableVisualizer,
+                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer,
+                            DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
                         };
 
                         // Convert to JSON and display
