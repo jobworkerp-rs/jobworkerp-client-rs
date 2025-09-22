@@ -400,8 +400,7 @@ impl JobCommand {
                         JobworkerpProto::parse_job_args_schema_descriptor(&rdata)
                             .map_err(|e| {
                                 anyhow::anyhow!(
-                                    "Failed to parse job_args schema descriptor: {:#?}",
-                                    e
+                                    "Failed to parse job_args schema descriptor: {e:#?}"
                                 )
                             })
                             .unwrap()
@@ -417,7 +416,7 @@ impl JobCommand {
                         JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
                             .map_err(|e| {
                                 println!("Failed to parse job_args schema: {:#?}", &e);
-                                anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e)
+                                anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
                             })
                             .unwrap()
                     } else {
@@ -427,8 +426,7 @@ impl JobCommand {
                     let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata)
                         .map_err(|e| {
                             anyhow::anyhow!(
-                                "Failed to parse job_result schema descriptor: {:#?}",
-                                e
+                                "Failed to parse job_result schema descriptor: {e:#?}"
                             )
                         })
                         .unwrap();

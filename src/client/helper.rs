@@ -390,7 +390,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let output = res
                     .output
                     .as_ref()
-                    .ok_or(anyhow!("job result output is empty: {:?}", res))?
+                    .ok_or(anyhow!("job result output is empty: {res:?}"))?
                     .items
                     .to_owned();
                 Ok(output)
@@ -572,7 +572,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .as_ref()
                     .map(|e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned())
                     .unwrap_or_else(|| format!("job failed with status: {:?}", res.status()));
-                Err(anyhow!("job failed: {}", error_message))
+                Err(anyhow!("job failed: {error_message}"))
             }
         }
     }
@@ -697,12 +697,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     output
                 } else {
                     Err(anyhow::anyhow!(
-                        "Failed to find or create worker: {:#?}",
-                        worker
+                        "Failed to find or create worker: {worker:#?}"
                     ))
                 }
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", name))
+                Err(anyhow::anyhow!("Not found runner: {name}"))
             }
         }
     }
@@ -757,10 +756,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     tracing::debug!("No result schema: {}", text);
                     Ok(serde_json::Value::String(text.to_string()))
                 }
-                .map_err(|e| anyhow::anyhow!("Failed to parse output: {:#?}", e));
+                .map_err(|e| anyhow::anyhow!("Failed to parse output: {e:#?}"));
                 output
             } else {
-                Err(anyhow::anyhow!("Not found runner: {}", runner_name))
+                Err(anyhow::anyhow!("Not found runner: {runner_name}"))
             }
         }
     }
@@ -787,14 +786,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     JobworkerpProto::parse_runner_settings_schema_descriptor(&sdata).map_err(
                         |e| {
                             anyhow::anyhow!(
-                                "Failed to parse runner_settings schema descriptor: {:#?}",
-                                e
+                                "Failed to parse runner_settings schema descriptor: {e:#?}"
                             )
                         },
                     )?;
                 let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
                     .map_err(|e| {
-                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {:#?}", e)
+                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
                     })?;
 
                 let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
@@ -803,7 +801,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true))
                         .unwrap_or(Ok(vec![]))
                         .map_err(|e| {
-                            anyhow::anyhow!("Failed to parse runner_settings schema: {:#?}", e)
+                            anyhow::anyhow!("Failed to parse runner_settings schema: {e:#?}")
                         })?
                 } else {
                     tracing::debug!("runner settings schema empty");
@@ -812,10 +810,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 tracing::debug!("job args: {:#?}", &job_args);
                 let job_args = if let Some(desc) = args_descriptor.clone() {
                     JobworkerpProto::json_value_to_message(desc, &job_args, true)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {:#?}", e))?
+                        .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {e:#?}"))?
                 } else {
                     serde_json::to_string(&job_args)
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {:#?}", e))?
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {e:#?}"))?
                         .as_bytes()
                         .to_vec()
                 };
@@ -887,15 +885,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }) = runner_opt
             {
                 let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
-                    .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {:#?}", e))?;
+                    .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
                 tracing::debug!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = if let Some(desc) = args_descriptor.clone() {
                     JobworkerpProto::json_value_to_message(desc, &job_args, true)
-                        .map_err(|e| anyhow!("Failed to parse job_args schema: {:#?}", e))?
+                        .map_err(|e| anyhow!("Failed to parse job_args schema: {e:#?}"))?
                 } else {
                     serde_json::to_string(&job_args)
-                        .map_err(|e| anyhow!("Failed to serialize job_args: {:#?}", e))?
+                        .map_err(|e| anyhow!("Failed to serialize job_args: {e:#?}"))?
                         .into_bytes()
                 };
 
@@ -918,12 +916,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             let j_str = ProtobufDescriptor::message_to_json(&m)?;
                             tracing::debug!("Result schema exists. decode message with proto: {:#?}", j_str);
                             serde_json::from_str(&j_str)
-                                .map_err(|e| anyhow!("Failed to parse JSON from protobuf message: {:#?}", e))
+                                .map_err(|e| anyhow!("Failed to parse JSON from protobuf message: {e:#?}"))
                         }
                         Err(e) => {
                             tracing::warn!("Failed to parse result with proto schema: {:#?}. Trying direct JSON parse.", e);
                             serde_json::from_slice(&output_bytes)
-                                .map_err(|e_slice| anyhow!("Failed to parse output as JSON (slice): {:#?}", e_slice))
+                                .map_err(|e_slice| anyhow!("Failed to parse output as JSON (slice): {e_slice:#?}"))
                         }
                     }
                 } else {
@@ -931,7 +929,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     tracing::debug!("No result schema, treating as string: {}", text);
                     Ok(serde_json::Value::String(text.into_owned()))
                 }
-                .map_err(|e| anyhow!("Failed to parse output: {:#?}", e))
+                .map_err(|e| anyhow!("Failed to parse output: {e:#?}"))
             } else {
                 Err(anyhow!(
                     "Not found runner with id: {:?} for worker: {}",
@@ -1003,7 +1001,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .await
                 .context("delete_worker_by_id")
             } else {
-                Err(anyhow!("Not found worker to delete: {}", name))
+                Err(anyhow!("Not found worker to delete: {name}"))
             }
         }
     }
