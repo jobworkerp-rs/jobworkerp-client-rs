@@ -141,7 +141,7 @@ impl QueueTypeArg {
             "NORMAL" => Ok(Self::Normal),
             "FORCED_RDB" => Ok(Self::ForcedRdb),
             "WITH_BACKUP" => Ok(Self::WithBackup),
-            _ => Err(anyhow!("unknown queue type: {}", s)),
+            _ => Err(anyhow!("unknown queue type: {s}")),
         }
     }
 }
@@ -156,7 +156,7 @@ impl ResponseTypeArg {
         match s {
             "NO_RESULT" => Ok(Self::NoResult),
             "DIRECT" => Ok(Self::Direct),
-            _ => Err(anyhow!("unknown response type: {}", s)),
+            _ => Err(anyhow!("unknown response type: {s}")),
         }
     }
 }
