@@ -425,9 +425,7 @@ impl JobCommand {
                     };
                     let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata)
                         .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to parse job_result schema descriptor: {e:#?}"
-                            )
+                            anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
                         })
                         .unwrap();
                     let (meta, mut response) = helper
