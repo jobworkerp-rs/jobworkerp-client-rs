@@ -129,6 +129,22 @@ pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool
             format,
             no_truncate
         ));
+
+        // Add protobuf schema fields
+        runner_json["runner_settings_proto"] = serde_json::json!(truncate_proto_definition(
+            &data.runner_settings_proto,
+            format,
+            no_truncate
+        ));
+        runner_json["job_args_proto"] = serde_json::json!(truncate_proto_definition(
+            &data.job_args_proto,
+            format,
+            no_truncate
+        ));
+        if let Some(result_proto) = &data.result_output_proto {
+            runner_json["result_output_proto"] =
+                serde_json::json!(truncate_proto_definition(result_proto, format, no_truncate));
+        }
     }
 
     runner_json
