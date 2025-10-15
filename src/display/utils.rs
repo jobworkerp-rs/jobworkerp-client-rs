@@ -12,7 +12,12 @@ pub fn truncate_string(text: &str, max_length: Option<usize>) -> String {
             if max_len <= 3 {
                 "...".to_string()
             } else {
-                format!("{}...", &text[..max_len - 3])
+                // Find the valid UTF-8 character boundary
+                let mut boundary = max_len.saturating_sub(3);
+                while !text.is_char_boundary(boundary) && boundary > 0 {
+                    boundary -= 1;
+                }
+                format!("{}...", &text[..boundary])
             }
         }
         _ => text.to_string(),
@@ -154,6 +159,16 @@ mod tests {
         assert_eq!(truncate_string("hi", Some(2)), "hi");
         assert_eq!(truncate_string("hello", Some(2)), "...");
         assert_eq!(truncate_string("hello", None), "hello");
+
+        // Test with Japanese/multibyte characters
+        assert_eq!(truncate_string("日本語テスト", Some(20)), "日本語テスト");
+        let truncated = truncate_string("文書片埋め込みベクトル検索プラグイン", Some(50));
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.len() <= 50);
+
+        // Ensure it doesn't panic on character boundaries
+        let result = truncate_string("文書片埋め込みベクトル検索プラグイン", Some(47));
+        assert!(result.ends_with("..."));
     }
 
     #[test]
