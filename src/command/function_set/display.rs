@@ -30,21 +30,28 @@ pub fn function_set_to_json(
                 .targets
                 .iter()
                 .map(|target| {
-                    let type_display = match format {
-                        DisplayFormat::Json => match target.r#type() {
-                            crate::jobworkerp::function::data::FunctionType::Runner => "RUNNER",
-                            crate::jobworkerp::function::data::FunctionType::Worker => "WORKER",
+                    use crate::jobworkerp::function::data::function_id;
+
+                    let (id_value, type_display) = match &target.id {
+                        Some(function_id::Id::RunnerId(rid)) => {
+                            let type_str = match format {
+                                DisplayFormat::Json => "RUNNER",
+                                _ => "🚀 RUNNER",
+                            };
+                            (rid.value, type_str.to_string())
                         }
-                        .to_string(),
-                        _ => match target.r#type() {
-                            crate::jobworkerp::function::data::FunctionType::Runner => "🚀 RUNNER",
-                            crate::jobworkerp::function::data::FunctionType::Worker => "⚙️ WORKER",
+                        Some(function_id::Id::WorkerId(wid)) => {
+                            let type_str = match format {
+                                DisplayFormat::Json => "WORKER",
+                                _ => "⚙️ WORKER",
+                            };
+                            (wid.value, type_str.to_string())
                         }
-                        .to_string(),
+                        None => (0, "UNKNOWN".to_string()),
                     };
 
                     json!({
-                        "id": target.id,
+                        "id": id_value,
                         "type": type_display
                     })
                 })
@@ -68,8 +75,9 @@ pub fn function_set_to_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobworkerp::function::data::{
-        FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType,
+    use crate::jobworkerp::{
+        data::{RunnerId, WorkerId},
+        function::data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId},
     };
 
     #[test]
@@ -81,13 +89,11 @@ mod tests {
                 description: "Test function set".to_string(),
                 category: 1,
                 targets: vec![
-                    FunctionTarget {
-                        id: 1001,
-                        r#type: FunctionType::Runner as i32,
+                    FunctionId {
+                        id: Some(function_id::Id::RunnerId(RunnerId { value: 1001 })),
                     },
-                    FunctionTarget {
-                        id: 2001,
-                        r#type: FunctionType::Worker as i32,
+                    FunctionId {
+                        id: Some(function_id::Id::WorkerId(WorkerId { value: 2001 })),
                     },
                 ],
             }),
@@ -129,9 +135,8 @@ mod tests {
                 name: "json_test".to_string(),
                 description: "JSON format test".to_string(),
                 category: 2,
-                targets: vec![FunctionTarget {
-                    id: 3001,
-                    r#type: FunctionType::Runner as i32,
+                targets: vec![FunctionId {
+                    id: Some(function_id::Id::RunnerId(RunnerId { value: 3001 })),
                 }],
             }),
         };

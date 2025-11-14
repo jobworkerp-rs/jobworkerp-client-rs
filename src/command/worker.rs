@@ -132,14 +132,14 @@ pub enum WorkerCommand {
 #[derive(ValueEnum, Debug, Clone)]
 pub enum QueueTypeArg {
     Normal,
-    ForcedRdb,
+    DbOnly,
     WithBackup,
 }
 impl QueueTypeArg {
     fn parse(s: &str) -> Result<Self> {
         match s {
             "NORMAL" => Ok(Self::Normal),
-            "FORCED_RDB" => Ok(Self::ForcedRdb),
+            "DB_ONLY" => Ok(Self::DbOnly),
             "WITH_BACKUP" => Ok(Self::WithBackup),
             _ => Err(anyhow!("unknown queue type: {s}")),
         }
@@ -217,7 +217,7 @@ impl WorkerCommand {
                     channel: channel.clone(),
                     queue_type: match queue_type {
                         QueueTypeArg::Normal => QueueType::Normal as i32,
-                        QueueTypeArg::ForcedRdb => QueueType::ForcedRdb as i32,
+                        QueueTypeArg::DbOnly => QueueType::DbOnly as i32,
                         QueueTypeArg::WithBackup => QueueType::WithBackup as i32,
                     },
                     response_type: match response_type {

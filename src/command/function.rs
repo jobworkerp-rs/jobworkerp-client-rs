@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use crate::{
     client::JobworkerpClient,
     command::to_request,
-    jobworkerp::data::{RetryPolicy, RunnerId, WorkerId},
+    jobworkerp::data::{QueueType, ResponseType, RetryPolicy, RunnerId, WorkerId},
     jobworkerp::function::{
         data::{
-            function_specs, FunctionCallOptions, FunctionResult, FunctionSchema, FunctionSpecs,
-            McpToolList, WorkerOptions,
+            function_specs, FunctionCallOptions, FunctionId, FunctionResult, FunctionSchema,
+            FunctionSpecs, McpToolList, WorkerOptions,
         },
         service::{
-            function_call_request, FindFunctionByIdRequest, FindFunctionByNameRequest,
-            FindFunctionRequest, FindFunctionSetRequest, FunctionCallRequest, RunnerParameters,
+            function_call_request, FindFunctionByNameRequest, FindFunctionRequest,
+            FindFunctionSetRequest, FunctionCallRequest, RunnerParameters,
         },
     },
 };
@@ -74,7 +74,9 @@ pub enum FunctionCommand {
         #[clap(long)]
         channel: Option<String>,
         #[clap(long)]
-        with_backup: bool,
+        queue_type: Option<String>,
+        #[clap(long)]
+        response_type: Option<String>,
         #[clap(long)]
         store_success: bool,
         #[clap(long)]
@@ -235,7 +237,8 @@ impl FunctionCommand {
                 streaming,
                 settings,
                 channel,
-                with_backup,
+                queue_type,
+                response_type,
                 store_success,
                 store_failure,
                 use_static,
@@ -255,6 +258,20 @@ impl FunctionCommand {
 
                 // Prepare runner parameters if calling a runner
                 let runner_parameters = if runner_name.is_some() {
+                    // Parse queue_type and response_type
+                    let queue_type_value = queue_type.as_ref().map(|qt| match qt.as_str() {
+                        "NORMAL" => QueueType::Normal as i32,
+                        "DB_ONLY" => QueueType::DbOnly as i32,
+                        "WITH_BACKUP" => QueueType::WithBackup as i32,
+                        _ => QueueType::Normal as i32,
+                    });
+
+                    let response_type_value = response_type.as_ref().map(|rt| match rt.as_str() {
+                        "NO_RESULT" => ResponseType::NoResult as i32,
+                        "DIRECT" => ResponseType::Direct as i32,
+                        _ => ResponseType::Direct as i32,
+                    });
+
                     // Create WorkerOptions from CLI parameters
                     let worker_options = WorkerOptions {
                         retry_policy: Some(RetryPolicy {
@@ -265,7 +282,8 @@ impl FunctionCommand {
                             basis: 2.0,
                         }),
                         channel: channel.clone(),
-                        with_backup: *with_backup,
+                        queue_type: queue_type_value,
+                        response_type: response_type_value,
                         store_success: *store_success,
                         store_failure: *store_failure,
                         use_static: *use_static,
@@ -333,18 +351,18 @@ impl FunctionCommand {
                     return;
                 }
 
-                use crate::jobworkerp::function::service::find_function_by_id_request;
+                use crate::jobworkerp::function::data::function_id;
 
                 // Build request based on which ID is provided
                 let request = if let Some(runner_id) = runner_id {
-                    FindFunctionByIdRequest {
-                        id: Some(find_function_by_id_request::Id::RunnerId(RunnerId {
+                    FunctionId {
+                        id: Some(function_id::Id::RunnerId(RunnerId {
                             value: *runner_id,
                         })),
                     }
                 } else if let Some(worker_id) = worker_id {
-                    FindFunctionByIdRequest {
-                        id: Some(find_function_by_id_request::Id::WorkerId(WorkerId {
+                    FunctionId {
+                        id: Some(function_id::Id::WorkerId(WorkerId {
                             value: *worker_id,
                         })),
                     }

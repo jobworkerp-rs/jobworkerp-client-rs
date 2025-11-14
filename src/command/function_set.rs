@@ -10,9 +10,12 @@ use std::collections::HashMap;
 
 use crate::{
     command::to_request,
-    jobworkerp::function::{
-        data::{FunctionSet, FunctionSetData, FunctionSetId, FunctionTarget, FunctionType},
-        service::FindByNameRequest,
+    jobworkerp::{
+        data::{RunnerId, WorkerId},
+        function::{
+            data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId},
+            service::FindByNameRequest,
+        },
     },
 };
 use clap::Parser;
@@ -296,7 +299,7 @@ impl FunctionSetCommand {
     }
 }
 
-fn parse_targets(targets_json: &str) -> Vec<FunctionTarget> {
+fn parse_targets(targets_json: &str) -> Vec<FunctionId> {
     let targets_value: Value = serde_json::from_str(targets_json).expect("Invalid JSON format");
     let targets_array = targets_value.as_array().expect("Targets must be an array");
 
@@ -312,18 +315,17 @@ fn parse_targets(targets_json: &str) -> Vec<FunctionTarget> {
             let type_value = target
                 .get("type")
                 .expect("Target must have type")
-                .as_i64()
-                .expect("type must be a number");
+                .as_str()
+                .expect("type must be a string (RUNNER or WORKER)");
 
-            let function_type = match type_value {
-                0 => FunctionType::Runner,
-                1 => FunctionType::Worker,
-                _ => panic!("Invalid function type: {type_value}"),
+            let function_id = match type_value {
+                "RUNNER" | "0" => function_id::Id::RunnerId(RunnerId { value: id }),
+                "WORKER" | "1" => function_id::Id::WorkerId(WorkerId { value: id }),
+                _ => panic!("Invalid function type: {type_value}. Must be RUNNER or WORKER"),
             };
 
-            FunctionTarget {
-                id,
-                r#type: function_type as i32,
+            FunctionId {
+                id: Some(function_id),
             }
         })
         .collect()
@@ -338,12 +340,12 @@ fn print_function_set(function_set: FunctionSet) {
         println!("\t[category] {}", data.category);
         println!("\t[targets]:");
         for (i, target) in data.targets.iter().enumerate() {
-            let type_str = match target.r#type {
-                0 => "RUNNER",
-                1 => "WORKER",
-                _ => "UNKNOWN",
+            let (id_value, type_str) = match &target.id {
+                Some(function_id::Id::RunnerId(rid)) => (rid.value, "RUNNER"),
+                Some(function_id::Id::WorkerId(wid)) => (wid.value, "WORKER"),
+                None => (0, "UNKNOWN"),
             };
-            println!("\t\t[{}] id: {}, type: {}", i, target.id, type_str);
+            println!("\t\t[{}] id: {}, type: {}", i, id_value, type_str);
         }
     } else {
         println!("Invalid function set data");
