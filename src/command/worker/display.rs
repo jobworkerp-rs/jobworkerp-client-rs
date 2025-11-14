@@ -17,13 +17,13 @@ impl EnumFormatter<QueueType> for QueueTypeFormatter {
         match format {
             DisplayFormat::Table => match queue_type {
                 QueueType::Normal => "NORMAL",
-                QueueType::ForcedRdb => "FORCED_RDB",
+                QueueType::DbOnly => "DB_ONLY",
                 QueueType::WithBackup => "WITH_BACKUP",
             }
             .to_string(),
             DisplayFormat::Card => match queue_type {
                 QueueType::Normal => "📝 NORMAL",
-                QueueType::ForcedRdb => "🗃️ FORCED_RDB",
+                QueueType::DbOnly => "🗃️ DB_ONLY",
                 QueueType::WithBackup => "💾 WITH_BACKUP",
             }
             .to_string(),
@@ -147,8 +147,8 @@ mod tests {
 
         // Test card format
         assert_eq!(
-            formatter.format(QueueType::ForcedRdb, &DisplayFormat::Card),
-            "🗃️ FORCED_RDB"
+            formatter.format(QueueType::DbOnly, &DisplayFormat::Card),
+            "🗃️ DB_ONLY"
         );
 
         // Test JSON format
