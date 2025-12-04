@@ -70,6 +70,8 @@ pub enum JobCommand {
         priority: Option<PriorityArg>,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        using: Option<String>,
     },
     EnqueueForStream {
         #[clap(short, long, value_parser = WorkerIdOrName::from_str)]
@@ -88,6 +90,8 @@ pub enum JobCommand {
         format: crate::display::DisplayFormat,
         #[clap(long)]
         no_truncate: bool,
+        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        using: Option<String>,
     },
     EnqueueWorkflow {
         #[clap(short, long)]
@@ -207,10 +211,12 @@ impl JobCommand {
                 run_after_time,
                 priority,
                 timeout,
+                using,
             } => {
                 let req = worker.to_job_worker();
+                let using_ref = using.as_deref();
                 let (_, args_desc, result_desc) =
-                    JobworkerpProto::find_runner_descriptors_by_worker(client, req)
+                    JobworkerpProto::find_runner_descriptors_by_worker(client, req, using_ref)
                         .await
                         .unwrap();
                 let request = JobRequest {
@@ -224,6 +230,7 @@ impl JobCommand {
                     run_after_time: *run_after_time,
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
                     timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
+                    using: using.clone(),
                 };
                 let response = client
                     .job_client()
@@ -265,10 +272,12 @@ impl JobCommand {
                 timeout,
                 format,
                 no_truncate,
+                using,
             } => {
                 let req = worker.to_job_worker();
+                let using_ref = using.as_deref();
                 let (_, args_desc, result_desc) =
-                    JobworkerpProto::find_runner_descriptors_by_worker(client, req)
+                    JobworkerpProto::find_runner_descriptors_by_worker(client, req, using_ref)
                         .await
                         .unwrap();
                 let request = JobRequest {
@@ -282,6 +291,7 @@ impl JobCommand {
                     run_after_time: *run_after_time,
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
                     timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
+                    using: using.clone(),
                 };
                 let response = client
                     .job_client()
@@ -397,7 +407,7 @@ impl JobCommand {
                         ..Default::default()
                     };
                     let args = if let Some(args_descriptor) =
-                        JobworkerpProto::parse_job_args_schema_descriptor(&rdata)
+                        JobworkerpProto::parse_job_args_schema_descriptor(&rdata, None)
                             .map_err(|e| {
                                 anyhow::anyhow!(
                                     "Failed to parse job_args schema descriptor: {e:#?}"
@@ -423,7 +433,7 @@ impl JobCommand {
                         println!("args_descriptor not found");
                         return;
                     };
-                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata)
+                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, None)
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
                         })
@@ -437,6 +447,7 @@ impl JobCommand {
                             timeout.map(|t| (t / 1000) as u32).unwrap_or(3600),
                             *run_after_time,
                             priority.clone().map(|p| p.to_grpc()),
+                            None, // using is None for workflow runners
                         )
                         .await
                         .inspect_err(|e| {
@@ -567,9 +578,11 @@ impl JobCommand {
                             // Get args descriptor for proper display
                             let args_descriptor = if let Some(data) = job_data.data.as_ref() {
                                 if let Some(worker_id) = data.worker_id.as_ref() {
+                                    let using_ref = data.using.as_deref();
                                     JobworkerpProto::find_runner_descriptors_by_worker(
                                         client,
                                         job_request::Worker::WorkerId(*worker_id),
+                                        using_ref,
                                     )
                                     .await
                                     .ok()
@@ -662,9 +675,11 @@ impl JobCommand {
                                 // Get args descriptor for proper display
                                 let args_descriptor = if let Some(data) = job.data.as_ref() {
                                     if let Some(worker_id) = data.worker_id.as_ref() {
+                                        let using_ref = data.using.as_deref();
                                         JobworkerpProto::find_runner_descriptors_by_worker(
                                             client,
                                             job_request::Worker::WorkerId(*worker_id),
+                                            using_ref,
                                         )
                                         .await
                                         .ok()
@@ -728,9 +743,11 @@ impl JobCommand {
                 println!("[job]:\n\t[id] {}", &jid.value);
                 if let Some(wid) = jdat.worker_id {
                     println!("\t[worker_id] {}", &wid.value);
+                    let using_ref = jdat.using.as_deref();
                     match JobworkerpProto::find_runner_descriptors_by_worker(
                         client,
                         job_request::Worker::WorkerId(wid),
+                        using_ref,
                     )
                     .await
                     {

@@ -5,10 +5,7 @@ use crate::{
     command::to_request,
     jobworkerp::data::{QueueType, ResponseType, RetryPolicy, RunnerId, WorkerId},
     jobworkerp::function::{
-        data::{
-            function_specs, FunctionCallOptions, FunctionId, FunctionResult, FunctionSchema,
-            FunctionSpecs, McpToolList, WorkerOptions,
-        },
+        data::{FunctionCallOptions, FunctionId, FunctionResult, FunctionSpecs, WorkerOptions},
         service::{
             function_call_request, FindFunctionByNameRequest, FindFunctionRequest,
             FindFunctionSetRequest, FunctionCallRequest, RunnerParameters,
@@ -351,10 +348,10 @@ impl FunctionCommand {
                     return;
                 }
 
-                use crate::jobworkerp::function::data::function_id;
+                use crate::jobworkerp::function::data::{function_id, FunctionUsing};
 
                 // Build request based on which ID is provided
-                let request = if let Some(runner_id) = runner_id {
+                let function_id_inner = if let Some(runner_id) = runner_id {
                     FunctionId {
                         id: Some(function_id::Id::RunnerId(RunnerId {
                             value: *runner_id,
@@ -368,6 +365,11 @@ impl FunctionCommand {
                     }
                 } else {
                     unreachable!("Validation should have caught this case")
+                };
+
+                let request = FunctionUsing {
+                    function_id: Some(function_id_inner),
+                    using: None,
                 };
 
                 // Make the gRPC call
@@ -517,48 +519,81 @@ impl FunctionCommand {
         println!("\t[name] {}", &function.name);
         println!("\t[description] {}", &function.description);
 
-        // Print input schema
-        match &function.schema {
-            Some(function_specs::Schema::SingleSchema(FunctionSchema {
-                settings,
-                arguments,
-                result_output_schema,
-            })) => {
-                println!("\t[input_schema]:");
-                if let Some(settings) = &settings {
-                    println!("\t\t[settings] |\n---\n{settings}");
-                } else {
-                    println!("\t\t[settings] (None)");
-                }
-                println!("\t\t[arguments] |\n---\n{}", &arguments);
-                // Print output schema if available
-                if let Some(result_output_schema) = &result_output_schema {
-                    println!("\t[result_output_schema] |\n---\n{result_output_schema}");
-                } else {
-                    println!("\t[result_output_schema] (None)");
-                }
-            }
-            Some(function_specs::Schema::McpTools(McpToolList { list })) => {
-                println!("\t[input_schema]:");
-                for tool in list {
-                    println!("\t\t[tool] {}", tool.name);
-                    println!("\t\t[description] {:?}", tool.description);
-                    println!("\t\t[input schema] {:?}", tool.input_schema);
-                    println!("\t\t[annotations] {:?}", tool.annotations);
-                }
-            }
-            None => {
-                println!("\t[input_schema] (None)");
-            }
+        // Print settings schema
+        if !function.settings_schema.is_empty() {
+            println!("\t[settings_schema] |\n---\n{}", &function.settings_schema);
+        } else {
+            println!("\t[settings_schema] (None)");
         }
 
-        // Print output type
-        println!(
-            "\t[output_type] {}",
-            crate::jobworkerp::data::StreamingOutputType::try_from(function.output_type)
-                .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
-                .as_str_name()
-        );
+        // Print methods
+        if let Some(method_map) = &function.methods {
+            if method_map.schemas.is_empty() {
+                println!("\t[methods] (None)");
+            } else if method_map.schemas.len() == 1 {
+                // Single method - detailed display
+                let (method_name, method_schema) = method_map.schemas.iter().next().unwrap();
+                println!("\t[method] {}", method_name);
+
+                if let Some(desc) = &method_schema.description {
+                    println!("\t\t[description] {}", desc);
+                }
+
+                println!("\t\t[arguments_schema] |\n---\n{}", &method_schema.arguments_schema);
+
+                if let Some(result_schema) = &method_schema.result_schema {
+                    println!("\t\t[result_schema] |\n---\n{}", result_schema);
+                } else {
+                    println!("\t\t[result_schema] (None)");
+                }
+
+                println!(
+                    "\t\t[output_type] {}",
+                    crate::jobworkerp::data::StreamingOutputType::try_from(method_schema.output_type)
+                        .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
+                        .as_str_name()
+                );
+
+                if let Some(annotations) = &method_schema.annotations {
+                    println!("\t\t[annotations]:");
+                    if let Some(title) = &annotations.title {
+                        println!("\t\t\t[title] {}", title);
+                    }
+                    if let Some(read_only) = annotations.read_only_hint {
+                        println!("\t\t\t[read_only_hint] {}", read_only);
+                    }
+                    if let Some(destructive) = annotations.destructive_hint {
+                        println!("\t\t\t[destructive_hint] {}", destructive);
+                    }
+                    if let Some(idempotent) = annotations.idempotent_hint {
+                        println!("\t\t\t[idempotent_hint] {}", idempotent);
+                    }
+                    if let Some(open_world) = annotations.open_world_hint {
+                        println!("\t\t\t[open_world_hint] {}", open_world);
+                    }
+                }
+            } else {
+                // Multiple methods - list view (sorted alphabetically)
+                println!("\t[methods] ({} methods):", method_map.schemas.len());
+                let mut method_names: Vec<_> = method_map.schemas.keys().collect();
+                method_names.sort();
+                for method_name in method_names {
+                    let method_schema = &method_map.schemas[method_name];
+                    println!("\t\t[method] {}", method_name);
+                    if let Some(desc) = &method_schema.description {
+                        println!("\t\t\t[description] {}", desc);
+                    }
+                    println!(
+                        "\t\t\t[output_type] {}",
+                        crate::jobworkerp::data::StreamingOutputType::try_from(method_schema.output_type)
+                            .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
+                            .as_str_name()
+                    );
+                }
+            }
+        } else {
+            println!("\t[methods] (None)");
+        }
     }
 
     pub fn print_function_result(result: &FunctionResult) {

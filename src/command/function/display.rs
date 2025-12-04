@@ -1,21 +1,7 @@
-use crate::display::{format::EnumFormatter, DisplayFormat};
+use crate::display::format::{StreamingOutputTypeFormatter, EnumFormatter};
+use crate::display::DisplayFormat;
 use crate::jobworkerp::data::StreamingOutputType;
 use serde_json::{json, Value as JsonValue};
-
-/// Formatter for StreamingOutputType enum with emoji decoration
-pub struct StreamingOutputTypeFormatter;
-impl EnumFormatter<StreamingOutputType> for StreamingOutputTypeFormatter {
-    fn format(&self, output_type: StreamingOutputType, format: &DisplayFormat) -> String {
-        match format {
-            DisplayFormat::Table | DisplayFormat::Card => match output_type {
-                StreamingOutputType::NonStreaming => "📄 NON_STREAMING".to_string(),
-                StreamingOutputType::Streaming => "📊 STREAMING".to_string(),
-                StreamingOutputType::Both => "📊🔄 BOTH".to_string(),
-            },
-            DisplayFormat::Json => output_type.as_str_name().to_string(),
-        }
-    }
-}
 
 /// Convert Function to JSON format for display
 pub fn function_to_json(
@@ -23,13 +9,10 @@ pub fn function_to_json(
     format: &DisplayFormat,
 ) -> JsonValue {
     let formatter = StreamingOutputTypeFormatter;
-    let output_type = StreamingOutputType::try_from(function.output_type)
-        .unwrap_or(StreamingOutputType::NonStreaming);
 
     let mut json_obj = json!({
         "name": function.name,
         "description": function.description,
-        "output_type": formatter.format(output_type, format)
     });
 
     // Add ID based on type (runner or worker)
@@ -42,42 +25,51 @@ pub fn function_to_json(
         json_obj["type"] = json!("WORKER");
     }
 
-    // Process schema based on type
-    match &function.schema {
-        Some(crate::jobworkerp::function::data::function_specs::Schema::SingleSchema(schema)) => {
-            let mut schema_obj = json!({});
+    // Add settings_schema
+    if !function.settings_schema.is_empty() {
+        json_obj["settings_schema"] = match format {
+            DisplayFormat::Json => json!(function.settings_schema),
+            _ => {
+                if function.settings_schema.len() > 200 {
+                    json!(format!("{}... [truncated]", &function.settings_schema[..197]))
+                } else {
+                    json!(function.settings_schema)
+                }
+            }
+        };
+    }
 
-            if let Some(settings) = &schema.settings {
-                schema_obj["settings"] = match format {
-                    DisplayFormat::Json => json!(settings),
-                    _ => {
-                        // For Card/Table, truncate long schemas
-                        if settings.len() > 200 {
-                            json!(format!("{}... [truncated]", &settings[..197]))
-                        } else {
-                            json!(settings)
-                        }
-                    }
-                };
+    // Process methods
+    if let Some(method_map) = &function.methods {
+        let method_count = method_map.schemas.len();
+
+        if method_count == 0 {
+            json_obj["methods"] = json!(null);
+        } else if method_count == 1 {
+            // Single method - include full details
+            let (method_name, method_schema) = method_map.schemas.iter().next().unwrap();
+
+            json_obj["method"] = json!(method_name);
+
+            if let Some(desc) = &method_schema.description {
+                json_obj["method_description"] = json!(desc);
             }
 
-            schema_obj["arguments"] = match format {
-                DisplayFormat::Json => json!(schema.arguments),
+            json_obj["arguments_schema"] = match format {
+                DisplayFormat::Json => json!(method_schema.arguments_schema),
                 _ => {
-                    // For Card/Table, truncate long schemas
-                    if schema.arguments.len() > 200 {
-                        json!(format!("{}... [truncated]", &schema.arguments[..197]))
+                    if method_schema.arguments_schema.len() > 200 {
+                        json!(format!("{}... [truncated]", &method_schema.arguments_schema[..197]))
                     } else {
-                        json!(schema.arguments)
+                        json!(method_schema.arguments_schema)
                     }
                 }
             };
 
-            if let Some(result_schema) = &schema.result_output_schema {
-                schema_obj["result_output_schema"] = match format {
+            if let Some(result_schema) = &method_schema.result_schema {
+                json_obj["result_schema"] = match format {
                     DisplayFormat::Json => json!(result_schema),
                     _ => {
-                        // For Card/Table, truncate long schemas
                         if result_schema.len() > 200 {
                             json!(format!("{}... [truncated]", &result_schema[..197]))
                         } else {
@@ -87,40 +79,68 @@ pub fn function_to_json(
                 };
             }
 
-            json_obj["schema"] = schema_obj;
-        }
-        Some(crate::jobworkerp::function::data::function_specs::Schema::McpTools(mcp_tools)) => {
-            let tools: Vec<JsonValue> = mcp_tools
-                .list
+            let output_type = StreamingOutputType::try_from(method_schema.output_type)
+                .unwrap_or(StreamingOutputType::NonStreaming);
+            json_obj["output_type"] = json!(formatter.format(output_type, format));
+
+            if let Some(annotations) = &method_schema.annotations {
+                if matches!(format, DisplayFormat::Json) {
+                    let mut ann_obj = json!({});
+                    if let Some(title) = &annotations.title {
+                        ann_obj["title"] = json!(title);
+                    }
+                    if let Some(read_only) = annotations.read_only_hint {
+                        ann_obj["read_only_hint"] = json!(read_only);
+                    }
+                    if let Some(destructive) = annotations.destructive_hint {
+                        ann_obj["destructive_hint"] = json!(destructive);
+                    }
+                    if let Some(idempotent) = annotations.idempotent_hint {
+                        ann_obj["idempotent_hint"] = json!(idempotent);
+                    }
+                    if let Some(open_world) = annotations.open_world_hint {
+                        ann_obj["open_world_hint"] = json!(open_world);
+                    }
+                    json_obj["annotations"] = ann_obj;
+                }
+            }
+        } else {
+            // Multiple methods - summary view (sorted alphabetically)
+            json_obj["method_count"] = json!(method_count);
+
+            let mut method_names: Vec<_> = method_map.schemas.keys().collect();
+            method_names.sort();
+            let methods: Vec<JsonValue> = method_names
                 .iter()
-                .map(|tool| {
-                    json!({
-                        "name": tool.name,
-                        "description": tool.description.as_ref().unwrap_or(&String::new()),
-                        "input_schema": match format {
-                            DisplayFormat::Json => tool.input_schema.clone(),
-                            _ => {
-                                // For Card/Table, truncate long schemas
-                                let schema = &tool.input_schema;
-                                if schema.len() > 150 {
-                                    format!("{}... [truncated]", &schema[..147])
-                                } else {
-                                    schema.clone()
-                                }
-                            }
+                .map(|name| {
+                    let schema = &method_map.schemas[*name];
+                    let mut method_obj = json!({
+                        "name": name,
+                    });
+
+                    if let Some(desc) = &schema.description {
+                        method_obj["description"] = json!(desc);
+                    }
+
+                    let output_type = StreamingOutputType::try_from(schema.output_type)
+                        .unwrap_or(StreamingOutputType::NonStreaming);
+                    method_obj["output_type"] = json!(formatter.format(output_type, format));
+
+                    if matches!(format, DisplayFormat::Json) {
+                        method_obj["arguments_schema"] = json!(schema.arguments_schema);
+                        if let Some(result_schema) = &schema.result_schema {
+                            method_obj["result_schema"] = json!(result_schema);
                         }
-                    })
+                    }
+
+                    method_obj
                 })
                 .collect();
 
-            json_obj["mcp_tools"] = json!({
-                "count": tools.len(),
-                "tools": tools
-            });
+            json_obj["methods"] = json!(methods);
         }
-        None => {
-            json_obj["schema"] = json!(null);
-        }
+    } else {
+        json_obj["methods"] = json!(null);
     }
 
     json_obj
@@ -188,54 +208,81 @@ pub fn function_result_to_json(
 mod tests {
     use super::*;
     use crate::jobworkerp::data::RunnerId;
-    use crate::jobworkerp::function::data::{FunctionSchema, FunctionSpecs};
+    use crate::jobworkerp::function::data::{FunctionSpecs, MethodSchema, MethodSchemaMap};
+    use std::collections::HashMap;
 
     #[test]
-    fn test_streaming_output_type_formatter() {
-        let formatter = StreamingOutputTypeFormatter;
-
-        // Test Table format
-        assert_eq!(
-            formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Table),
-            "📊 STREAMING"
+    fn test_function_to_json_single_method() {
+        let mut schemas = HashMap::new();
+        schemas.insert(
+            "run".to_string(),
+            MethodSchema {
+                description: Some("Test method description".to_string()),
+                arguments_schema: r#"{"type": "object", "properties": {"arg1": {"type": "string"}}}"#.to_string(),
+                result_schema: Some(r#"{"type": "object", "properties": {"result": {"type": "string"}}}"#.to_string()),
+                output_type: StreamingOutputType::Streaming as i32,
+                annotations: None,
+            },
         );
-        assert_eq!(
-            formatter.format(StreamingOutputType::NonStreaming, &DisplayFormat::Card),
-            "📄 NON_STREAMING"
-        );
 
-        // Test JSON format
-        assert_eq!(
-            formatter.format(StreamingOutputType::Streaming, &DisplayFormat::Json),
-            "STREAMING"
-        );
-    }
-
-    #[test]
-    fn test_function_to_json_runner() {
         let function = FunctionSpecs {
             runner_type: crate::jobworkerp::data::RunnerType::Command as i32,
             runner_id: Some(RunnerId { value: 1001 }),
             worker_id: None,
             name: "test_function".to_string(),
             description: "Test function description".to_string(),
-            output_type: StreamingOutputType::Streaming as i32,
-            schema: Some(
-                crate::jobworkerp::function::data::function_specs::Schema::SingleSchema(
-                    FunctionSchema {
-                        settings: Some("{}".to_string()),
-                        arguments: "{\"type\": \"object\"}".to_string(),
-                        result_output_schema: None,
-                    },
-                ),
-            ),
+            settings_schema: r#"{"type": "object", "properties": {"api_key": {"type": "string"}}}"#.to_string(),
+            methods: Some(MethodSchemaMap { schemas }),
         };
 
         let json = function_to_json(&function, &DisplayFormat::Table);
         assert_eq!(json["name"], "test_function");
         assert_eq!(json["runner_id"], 1001);
         assert_eq!(json["type"], "RUNNER");
-        assert_eq!(json["output_type"], "📊 STREAMING");
+        assert_eq!(json["method"], "run");
+        assert_eq!(json["output_type"], "STREAMING");
+        assert!(json["arguments_schema"].is_string());
+    }
+
+    #[test]
+    fn test_function_to_json_multiple_methods() {
+        let mut schemas = HashMap::new();
+        schemas.insert(
+            "fetch_html".to_string(),
+            MethodSchema {
+                description: Some("Fetch HTML from URL".to_string()),
+                arguments_schema: r#"{"type": "object", "properties": {"url": {"type": "string"}}}"#.to_string(),
+                result_schema: Some(r#"{"type": "string"}"#.to_string()),
+                output_type: StreamingOutputType::NonStreaming as i32,
+                annotations: None,
+            },
+        );
+        schemas.insert(
+            "get_current_time".to_string(),
+            MethodSchema {
+                description: Some("Get current server time".to_string()),
+                arguments_schema: r#"{"type": "object"}"#.to_string(),
+                result_schema: Some(r#"{"type": "object", "properties": {"timestamp": {"type": "number"}}}"#.to_string()),
+                output_type: StreamingOutputType::NonStreaming as i32,
+                annotations: None,
+            },
+        );
+
+        let function = FunctionSpecs {
+            runner_type: crate::jobworkerp::data::RunnerType::McpServer as i32,
+            runner_id: Some(RunnerId { value: 2001 }),
+            worker_id: None,
+            name: "mcp_server_function".to_string(),
+            description: "MCP Server with multiple tools".to_string(),
+            settings_schema: "".to_string(),
+            methods: Some(MethodSchemaMap { schemas }),
+        };
+
+        let json = function_to_json(&function, &DisplayFormat::Card);
+        assert_eq!(json["name"], "mcp_server_function");
+        assert_eq!(json["method_count"], 2);
+        assert!(json["methods"].is_array());
+        assert_eq!(json["methods"].as_array().unwrap().len(), 2);
     }
 
     #[test]

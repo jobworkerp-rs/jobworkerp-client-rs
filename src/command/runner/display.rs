@@ -3,8 +3,9 @@
 //! This module handles the conversion of Runner data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
-use crate::display::{format::EnumFormatter, DisplayFormat};
-use crate::jobworkerp::data::{Runner, RunnerType, StreamingOutputType};
+use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
+use crate::display::DisplayFormat;
+use crate::jobworkerp::data::{Runner, RunnerType};
 use serde_json::Value as JsonValue;
 
 /// Formatter for RunnerType enum
@@ -46,29 +47,6 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
             }
             .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
-        }
-    }
-}
-
-/// Formatter for StreamingOutputType enum
-pub struct StreamingOutputTypeFormatter;
-
-impl EnumFormatter<StreamingOutputType> for StreamingOutputTypeFormatter {
-    fn format(&self, output_type: StreamingOutputType, format: &DisplayFormat) -> String {
-        match format {
-            DisplayFormat::Table => match output_type {
-                StreamingOutputType::Streaming => "STREAMING",
-                StreamingOutputType::NonStreaming => "NON_STREAMING",
-                StreamingOutputType::Both => "BOTH",
-            }
-            .to_string(),
-            DisplayFormat::Card => match output_type {
-                StreamingOutputType::Streaming => "📊 STREAMING",
-                StreamingOutputType::NonStreaming => "📄 NON_STREAMING",
-                StreamingOutputType::Both => "🔄 BOTH",
-            }
-            .to_string(),
-            DisplayFormat::Json => output_type.as_str_name().to_string(),
         }
     }
 }
@@ -118,11 +96,6 @@ pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool
         runner_json["runner_type"] =
             serde_json::json!(runner_type_formatter.format(data.runner_type(), format));
 
-        let output_type = StreamingOutputType::try_from(data.output_type)
-            .unwrap_or(StreamingOutputType::NonStreaming);
-        runner_json["output_type"] =
-            serde_json::json!(output_type_formatter.format(output_type, format));
-
         // Format proto definition with truncation
         runner_json["definition"] = serde_json::json!(truncate_proto_definition(
             &data.definition,
@@ -130,20 +103,52 @@ pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool
             no_truncate
         ));
 
-        // Add protobuf schema fields
+        // Add runner_settings_proto
         runner_json["runner_settings_proto"] = serde_json::json!(truncate_proto_definition(
             &data.runner_settings_proto,
             format,
             no_truncate
         ));
-        runner_json["job_args_proto"] = serde_json::json!(truncate_proto_definition(
-            &data.job_args_proto,
-            format,
-            no_truncate
-        ));
-        if let Some(result_proto) = &data.result_output_proto {
-            runner_json["result_output_proto"] =
-                serde_json::json!(truncate_proto_definition(result_proto, format, no_truncate));
+
+        // Display method_proto_map
+        if let Some(method_map) = &data.method_proto_map {
+            let methods: Vec<String> = method_map.schemas.keys().cloned().collect();
+            runner_json["methods"] = serde_json::json!(methods);
+
+            match format {
+                DisplayFormat::Json => {
+                    // Detailed information for JSON format
+                    let mut method_details = serde_json::Map::new();
+                    for (name, schema) in &method_map.schemas {
+                        method_details.insert(
+                            name.clone(),
+                            serde_json::json!({
+                                "args_proto": truncate_proto_definition(&schema.args_proto, format, no_truncate),
+                                "result_proto": truncate_proto_definition(&schema.result_proto, format, no_truncate),
+                                "description": schema.description,
+                                "output_type": output_type_formatter.format(schema.output_type(), format),
+                            }),
+                        );
+                    }
+                    runner_json["method_schemas"] = serde_json::json!(method_details);
+                }
+                DisplayFormat::Card => {
+                    if method_map.schemas.len() == 1 {
+                        let (name, schema) = method_map.schemas.iter().next().unwrap();
+                        runner_json["method"] = serde_json::json!(name);
+                        runner_json["output_type"] = serde_json::json!(
+                            output_type_formatter.format(schema.output_type(), format)
+                        );
+                    } else {
+                        runner_json["method_count"] = serde_json::json!(method_map.schemas.len());
+                    }
+                }
+                DisplayFormat::Table => {
+                    runner_json["method_count"] = serde_json::json!(method_map.schemas.len());
+                }
+            }
+        } else {
+            runner_json["methods"] = serde_json::json!([]);
         }
     }
 
@@ -179,6 +184,8 @@ mod tests {
 
     #[test]
     fn test_streaming_output_type_formatter() {
+        use crate::jobworkerp::data::StreamingOutputType;
+
         let formatter = StreamingOutputTypeFormatter;
 
         // Test table format

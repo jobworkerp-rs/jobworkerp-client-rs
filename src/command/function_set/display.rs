@@ -32,7 +32,7 @@ pub fn function_set_to_json(
                 .map(|target| {
                     use crate::jobworkerp::function::data::function_id;
 
-                    let (id_value, type_display) = match &target.id {
+                    let (id_value, type_display) = match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
                         Some(function_id::Id::RunnerId(rid)) => {
                             let type_str = match format {
                                 DisplayFormat::Json => "RUNNER",
@@ -82,6 +82,8 @@ mod tests {
 
     #[test]
     fn test_function_set_to_json_basic() {
+        use crate::jobworkerp::function::data::FunctionUsing;
+
         let function_set = FunctionSet {
             id: Some(FunctionSetId { value: 123 }),
             data: Some(FunctionSetData {
@@ -89,11 +91,17 @@ mod tests {
                 description: "Test function set".to_string(),
                 category: 1,
                 targets: vec![
-                    FunctionId {
-                        id: Some(function_id::Id::RunnerId(RunnerId { value: 1001 })),
+                    FunctionUsing {
+                        function_id: Some(FunctionId {
+                            id: Some(function_id::Id::RunnerId(RunnerId { value: 1001 })),
+                        }),
+                        using: None,
                     },
-                    FunctionId {
-                        id: Some(function_id::Id::WorkerId(WorkerId { value: 2001 })),
+                    FunctionUsing {
+                        function_id: Some(FunctionId {
+                            id: Some(function_id::Id::WorkerId(WorkerId { value: 2001 })),
+                        }),
+                        using: None,
                     },
                 ],
             }),
@@ -129,14 +137,19 @@ mod tests {
 
     #[test]
     fn test_function_set_json_format() {
+        use crate::jobworkerp::function::data::FunctionUsing;
+
         let function_set = FunctionSet {
             id: Some(FunctionSetId { value: 789 }),
             data: Some(FunctionSetData {
                 name: "json_test".to_string(),
                 description: "JSON format test".to_string(),
                 category: 2,
-                targets: vec![FunctionId {
-                    id: Some(function_id::Id::RunnerId(RunnerId { value: 3001 })),
+                targets: vec![FunctionUsing {
+                    function_id: Some(FunctionId {
+                        id: Some(function_id::Id::RunnerId(RunnerId { value: 3001 })),
+                    }),
+                    using: None,
                 }],
             }),
         };

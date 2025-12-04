@@ -1,6 +1,7 @@
 //! Display format definitions and enum formatting functionality
 
 use clap::ValueEnum;
+use crate::jobworkerp::data::StreamingOutputType;
 
 /// Available display formats for CLI output
 #[derive(Debug, Clone, PartialEq, ValueEnum)]
@@ -29,6 +30,29 @@ impl std::fmt::Display for DisplayFormat {
 /// Trait for formatting enum values based on display format
 pub trait EnumFormatter<T> {
     fn format(&self, value: T, format: &DisplayFormat) -> String;
+}
+
+/// Formatter for StreamingOutputType enum
+pub struct StreamingOutputTypeFormatter;
+
+impl EnumFormatter<StreamingOutputType> for StreamingOutputTypeFormatter {
+    fn format(&self, output_type: StreamingOutputType, format: &DisplayFormat) -> String {
+        match format {
+            DisplayFormat::Table => match output_type {
+                StreamingOutputType::Streaming => "STREAMING",
+                StreamingOutputType::NonStreaming => "NON_STREAMING",
+                StreamingOutputType::Both => "BOTH",
+            }
+            .to_string(),
+            DisplayFormat::Card => match output_type {
+                StreamingOutputType::Streaming => "📊 STREAMING",
+                StreamingOutputType::NonStreaming => "📄 NON_STREAMING",
+                StreamingOutputType::Both => "🔄 BOTH",
+            }
+            .to_string(),
+            DisplayFormat::Json => output_type.as_str_name().to_string(),
+        }
+    }
 }
 
 /// Utility functions for color formatting

@@ -12,10 +12,7 @@ use crate::{
         utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
         JsonVisualizer, TableVisualizer,
     },
-    jobworkerp::{
-        data::{Runner, RunnerId},
-        service::{CountCondition, FindListRequest},
-    },
+    jobworkerp::data::{Runner, RunnerId},
 };
 use clap::Parser;
 
@@ -153,14 +150,18 @@ impl RunnerCommand {
                 format,
                 no_truncate,
             } => {
-                let request = FindListRequest {
-                    offset: *offset,
+                let request = crate::jobworkerp::service::FindRunnerListRequest {
+                    runner_types: vec![], // Empty = all types
+                    name_filter: None,
                     limit: *limit,
+                    offset: *offset,
+                    sort_by: None,
+                    ascending: None,
                 };
                 let response = client
                     .runner_client()
                     .await
-                    .find_list(to_request(metadata, request).unwrap())
+                    .find_list_by(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
 
@@ -201,10 +202,14 @@ impl RunnerCommand {
                 println!("{response:#?}");
             }
             RunnerCommand::Count {} => {
+                let request = crate::jobworkerp::service::CountRunnerRequest {
+                    runner_types: vec![],
+                    name_filter: None,
+                };
                 let response = client
                     .runner_client()
                     .await
-                    .count(to_request(metadata, CountCondition {}).unwrap())
+                    .count_by(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("{:#?}", response.into_inner().total);
@@ -256,20 +261,20 @@ impl RunnerCommand {
                 "\t[runner_settings_proto] |\n---\n{}",
                 &data.runner_settings_proto
             );
-            println!("\t[job_args_proto] |\n---\n{}", &data.job_args_proto);
-            println!(
-                "\t[result_output_proto] |\n---\n{}",
-                &data
-                    .result_output_proto
-                    .clone()
-                    .unwrap_or("(None)".to_string())
-            );
-            println!(
-                "\t[output_type] |\n---\n{}",
-                crate::jobworkerp::data::StreamingOutputType::try_from(data.output_type)
-                    .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
-                    .as_str_name()
-            );
+            if let Some(method_map) = &data.method_proto_map {
+                println!("\t[methods] {} available", method_map.schemas.len());
+                for (name, schema) in &method_map.schemas {
+                    println!("\t\t[method: {}]", name);
+                    if let Some(desc) = &schema.description {
+                        println!("\t\t\t[description] {}", desc);
+                    }
+                    println!("\t\t\t[args_proto] |\n{}", &schema.args_proto);
+                    println!("\t\t\t[result_proto] |\n{}", &schema.result_proto);
+                    println!("\t\t\t[output_type] {}", schema.output_type().as_str_name());
+                }
+            } else {
+                println!("\t[methods] (None)");
+            }
         } else {
             println!("[runner]:\n\tdata is empty");
         }
