@@ -149,7 +149,7 @@ impl JobResultCommand {
             } => {
                 let req = worker.to_job_worker();
                 let (_, _args_desc, result_desc) =
-                    JobworkerpProto::find_runner_descriptors_by_worker(client, req)
+                    JobworkerpProto::find_runner_descriptors_by_worker(client, req, None)
                         .await
                         .unwrap();
 
@@ -255,7 +255,7 @@ impl JobResultCommand {
                         .map(|d| d.worker_name.as_str())
                         .unwrap_or("");
                     let result_proto =
-                        JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                        JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
                     job_results_json.push(job_result_json);
                 }
@@ -313,7 +313,7 @@ impl JobResultCommand {
                         .map(|d| d.worker_name.as_str())
                         .unwrap_or("");
                     let result_proto =
-                        JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+                        JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
                     job_results_json.push(job_result_json);
                 }
@@ -379,7 +379,7 @@ impl JobResultCommand {
             .as_ref()
             .map(|d| d.worker_name.as_str())
             .unwrap_or("");
-        let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name).await;
+        let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
 
         // Convert to JSON with proper formatting
         let job_result_json = job_result_to_json(&job_result, result_proto, format);

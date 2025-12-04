@@ -296,17 +296,18 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn enqueue_and_get_result_worker_job_with_runner(
-        &self,
-        cx: Option<&opentelemetry::Context>,
+    fn enqueue_and_get_result_worker_job_with_runner<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
         metadata: Arc<HashMap<String, String>>,
-        runner_name: &str,
+        runner_name: &'a str,
         mut worker_data: WorkerData,
         args: Vec<u8>,
         timeout_sec: u32,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
-    ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
+        using: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Result<JobResultData>> + Send + 'a {
         async move {
             let runner = self
                 .find_runner_by_name(cx, metadata.clone(), runner_name)
@@ -322,6 +323,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     timeout_sec,
                     run_after_time,
                     priority,
+                    using,
                 )
                 .await?;
             if res.status() == ResultStatus::Success {
@@ -345,6 +347,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         timeout_sec: u32,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
+        using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
             self.enqueue_worker_job(
@@ -355,6 +358,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 timeout_sec,
                 run_after_time,
                 priority,
+                using,
             )
             .await?
             .result
@@ -373,6 +377,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         timeout_sec: u32,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
+        using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let res = self
@@ -384,6 +389,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     timeout_sec,
                     run_after_time,
                     priority,
+                    using,
                 )
                 .await?;
             if res.status() == ResultStatus::Success && res.output.is_some() {
@@ -413,6 +419,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         timeout_sec: u32,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
+        using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send + 'a {
         async move {
             let worker = self
@@ -428,6 +435,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 )),
                 priority: priority.map(|p| p as i32),
                 run_after_time,
+                using: using.map(|s| s.to_string()),
                 ..Default::default()
             };
             let tonic_request = tonic::Request::new(job_request_payload);
@@ -463,6 +471,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         timeout_sec: u32,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
+        using: Option<&'a str>,
     ) -> impl std::future::Future<
         Output = Result<(
             tonic::metadata::MetadataMap,
@@ -484,6 +493,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 )),
                 priority: priority.map(|p| p as i32),
                 run_after_time,
+                using: using.map(|s| s.to_string()),
                 ..Default::default()
             };
             let tonic_request = tonic::Request::new(job_request_payload);
@@ -519,6 +529,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         worker_spec: crate::jobworkerp::service::job_request::Worker,
         args: Vec<u8>,
         timeout_sec: u32,
+        using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send + 'a {
         async move {
             tracing::debug!("enqueue_job_and_get_output: {:?}", &worker_spec);
@@ -527,6 +538,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 timeout: Some((timeout_sec * 1000).into()),
                 worker: Some(worker_spec.clone()),
                 priority: Some(Priority::High as i32),
+                using: using.map(|s| s.to_string()),
                 ..Default::default()
             };
             let tonic_request = tonic::Request::new(job_request_payload);
@@ -586,6 +598,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         worker_params: Option<serde_json::Value>,
         job_args: Vec<u8>,
         job_timeout_sec: u32,
+        using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         let name = name.to_owned();
         async move {
@@ -673,6 +686,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             w,
                             job_args,
                             job_timeout_sec,
+                            using,
                         )
                         .await
                         .inspect_err(|e| {
@@ -715,6 +729,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         worker_params: Option<serde_json::Value>,
         job_args: Vec<u8>,
         job_timeout_sec: u32,
+        using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         async move {
             if let Some(Runner {
@@ -724,7 +739,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .find_runner_by_name(cx, metadata.clone(), runner_name)
                 .await?
             {
-                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
+                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
                 let output = self
                     .setup_worker_and_enqueue_with_raw_output(
                         cx,
@@ -734,6 +749,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         worker_params,
                         job_args,
                         job_timeout_sec,
+                        using,
                     )
                     .await?;
                 let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
@@ -773,6 +789,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         worker_params: Option<serde_json::Value>,
         job_args: serde_json::Value,
         job_timeout_sec: u32,
+        using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         async move {
             if let Some(Runner {
@@ -790,7 +807,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             )
                         },
                     )?;
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)
                     .map_err(|e| {
                         anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
                     })?;
@@ -825,6 +842,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     worker_params,
                     job_args,
                     job_timeout_sec,
+                    using,
                 )
                 .await
             } else {
@@ -842,6 +860,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         worker_data: &'a WorkerData,
         job_args: serde_json::Value,
         job_timeout_sec: u32,
+        using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
         async move {
             let runner_id = worker_data.runner_id.ok_or_else(|| {
@@ -884,7 +903,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 data: Some(sdata),
             }) = runner_opt
             {
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata)
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)
                     .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
                 tracing::debug!("job args (json): {:#?}", &job_args);
@@ -906,10 +925,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         job_timeout_sec,
                         None,
                         None,
+                        using,
                     )
                     .await?;
 
-                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata)?;
+                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
                 if let Some(desc) = result_descriptor {
                     match ProtobufDescriptor::get_message_from_bytes(desc, &output_bytes) {
                         Ok(m) => {

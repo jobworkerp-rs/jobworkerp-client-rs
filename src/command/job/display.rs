@@ -189,6 +189,7 @@ mod tests {
                 priority: Priority::Medium as i32,
                 timeout: 30000,
                 request_streaming: false,
+                using: None,
             }),
             metadata: HashMap::new(),
         };
@@ -219,6 +220,7 @@ mod tests {
                 priority: Priority::Medium as i32,
                 timeout: 30000,
                 request_streaming: false,
+                using: None,
             }),
             metadata: HashMap::new(),
         };

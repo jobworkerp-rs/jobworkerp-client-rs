@@ -13,7 +13,7 @@ use crate::{
     jobworkerp::{
         data::{RunnerId, WorkerId},
         function::{
-            data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId},
+            data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId, FunctionUsing},
             service::FindByNameRequest,
         },
     },
@@ -299,7 +299,7 @@ impl FunctionSetCommand {
     }
 }
 
-fn parse_targets(targets_json: &str) -> Vec<FunctionId> {
+fn parse_targets(targets_json: &str) -> Vec<FunctionUsing> {
     let targets_value: Value = serde_json::from_str(targets_json).expect("Invalid JSON format");
     let targets_array = targets_value.as_array().expect("Targets must be an array");
 
@@ -318,14 +318,17 @@ fn parse_targets(targets_json: &str) -> Vec<FunctionId> {
                 .as_str()
                 .expect("type must be a string (RUNNER or WORKER)");
 
-            let function_id = match type_value {
+            let function_id_inner = match type_value {
                 "RUNNER" | "0" => function_id::Id::RunnerId(RunnerId { value: id }),
                 "WORKER" | "1" => function_id::Id::WorkerId(WorkerId { value: id }),
                 _ => panic!("Invalid function type: {type_value}. Must be RUNNER or WORKER"),
             };
 
-            FunctionId {
-                id: Some(function_id),
+            FunctionUsing {
+                function_id: Some(FunctionId {
+                    id: Some(function_id_inner),
+                }),
+                using: None,
             }
         })
         .collect()
@@ -340,7 +343,7 @@ fn print_function_set(function_set: FunctionSet) {
         println!("\t[category] {}", data.category);
         println!("\t[targets]:");
         for (i, target) in data.targets.iter().enumerate() {
-            let (id_value, type_str) = match &target.id {
+            let (id_value, type_str) = match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
                 Some(function_id::Id::RunnerId(rid)) => (rid.value, "RUNNER"),
                 Some(function_id::Id::WorkerId(wid)) => (wid.value, "WORKER"),
                 None => (0, "UNKNOWN"),
