@@ -22,7 +22,7 @@ use crate::{
     jobworkerp::{
         self,
         data::{QueueType, ResponseType, RunnerId, WorkerData, WorkerId},
-        service::{CountCondition, WorkerNameRequest},
+        service::{CountWorkerRequest, WorkerNameRequest},
     },
     proto::JobworkerpProto,
 };
@@ -434,10 +434,17 @@ impl WorkerCommand {
                 println!("{response:#?}");
             }
             WorkerCommand::Count {} => {
+                let request = CountWorkerRequest {
+                    runner_types: vec![],
+                    channel: None,
+                    name_filter: None,
+                    is_periodic: None,
+                    runner_ids: vec![],
+                };
                 let response = client
                     .worker_client()
                     .await
-                    .count(to_request(metadata, CountCondition {}).unwrap())
+                    .count_by(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("{response:#?}");

@@ -5,7 +5,7 @@ use super::{to_request, WorkerIdOrName};
 use crate::jobworkerp;
 use crate::jobworkerp::data::{JobId, JobResult, JobResultId};
 use crate::jobworkerp::service::{
-    CountCondition, FindListRequest, ListenByWorkerRequest, ListenRequest,
+    CountJobResultRequest, FindJobResultListRequest, ListenByWorkerRequest, ListenRequest,
 };
 use crate::proto::JobworkerpProto;
 use clap::Parser;
@@ -234,14 +234,24 @@ impl JobResultCommand {
                     JsonVisualizer, TableVisualizer,
                 };
 
-                let request = FindListRequest {
+                let request = FindJobResultListRequest {
+                    worker_ids: vec![],
+                    statuses: vec![],
+                    priorities: vec![],
+                    uniq_key: None,
+                    start_time_from: None,
+                    start_time_to: None,
+                    end_time_from: None,
+                    end_time_to: None,
+                    sort_by: None,
+                    ascending: None,
                     offset: *offset,
                     limit: *limit,
                 };
                 let response = client
                     .job_result_client()
                     .await
-                    .find_list(to_request(metadata, request).unwrap())
+                    .find_list_by(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 let mut response = response.into_inner();
@@ -351,10 +361,20 @@ impl JobResultCommand {
                 println!("{response:#?}");
             }
             JobResultCommand::Count {} => {
+                let request = CountJobResultRequest {
+                    worker_ids: vec![],
+                    statuses: vec![],
+                    priorities: vec![],
+                    uniq_key: None,
+                    start_time_from: None,
+                    start_time_to: None,
+                    end_time_from: None,
+                    end_time_to: None,
+                };
                 let response = client
                     .job_result_client()
                     .await
-                    .count(to_request(metadata, CountCondition {}).unwrap())
+                    .count_by(to_request(metadata, request).unwrap())
                     .await
                     .unwrap();
                 println!("{response:#?}");
