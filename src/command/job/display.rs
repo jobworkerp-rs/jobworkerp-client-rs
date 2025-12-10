@@ -121,6 +121,8 @@ fn format_timestamp(timestamp_ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::jobworkerp::data::StreamingType;
+
     use super::*;
 
     #[test]
@@ -188,7 +190,7 @@ mod tests {
                 retried: 0,
                 priority: Priority::Medium as i32,
                 timeout: 30000,
-                request_streaming: false,
+                streaming_type: StreamingType::None as i32,
                 using: None,
             }),
             metadata: HashMap::new(),
@@ -219,7 +221,7 @@ mod tests {
                 retried: 0,
                 priority: Priority::Medium as i32,
                 timeout: 30000,
-                request_streaming: false,
+                streaming_type: StreamingType::None as i32,
                 using: None,
             }),
             metadata: HashMap::new(),

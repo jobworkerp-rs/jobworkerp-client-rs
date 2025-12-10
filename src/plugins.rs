@@ -114,6 +114,45 @@ pub trait MultiMethodPluginRunner: Send + Sync {
         None
     }
     fn settings_schema(&self) -> String;
+
+    /// Collect streaming output into a single result
+    ///
+    /// Default implementation: keeps only the last data chunk
+    /// (protobuf binary concatenation produces invalid data)
+    /// Plugins should override this for custom collection logic (e.g., merging proto messages)
+    fn collect_stream(
+        &self,
+        stream: futures::stream::BoxStream<'static, crate::jobworkerp::data::ResultOutputItem>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(Vec<u8>, HashMap<String, String>)>>
+                + Send
+                + 'static,
+        >,
+    > {
+        use crate::jobworkerp::data::result_output_item;
+        use futures::StreamExt;
+
+        Box::pin(async move {
+            let mut last_data: Option<Vec<u8>> = None;
+            let mut metadata = HashMap::new();
+            let mut stream = stream;
+
+            while let Some(item) = stream.next().await {
+                match item.item {
+                    Some(result_output_item::Item::Data(data)) => {
+                        last_data = Some(data);
+                    }
+                    Some(result_output_item::Item::End(trailer)) => {
+                        metadata = trailer.metadata;
+                        break;
+                    }
+                    None => {}
+                }
+            }
+            Ok((last_data.unwrap_or_default(), metadata))
+        })
+    }
 }
 
 /// Macro to convert a Rust type to a JSON schema string
