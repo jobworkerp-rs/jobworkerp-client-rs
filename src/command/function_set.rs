@@ -13,7 +13,9 @@ use crate::{
     jobworkerp::{
         data::{RunnerId, WorkerId},
         function::{
-            data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId, FunctionUsing},
+            data::{
+                function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId, FunctionUsing,
+            },
             service::FindByNameRequest,
         },
     },
@@ -343,11 +345,12 @@ fn print_function_set(function_set: FunctionSet) {
         println!("\t[category] {}", data.category);
         println!("\t[targets]:");
         for (i, target) in data.targets.iter().enumerate() {
-            let (id_value, type_str) = match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
-                Some(function_id::Id::RunnerId(rid)) => (rid.value, "RUNNER"),
-                Some(function_id::Id::WorkerId(wid)) => (wid.value, "WORKER"),
-                None => (0, "UNKNOWN"),
-            };
+            let (id_value, type_str) =
+                match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
+                    Some(function_id::Id::RunnerId(rid)) => (rid.value, "RUNNER"),
+                    Some(function_id::Id::WorkerId(wid)) => (wid.value, "WORKER"),
+                    None => (0, "UNKNOWN"),
+                };
             println!("\t\t[{}] id: {}, type: {}", i, id_value, type_str);
         }
     } else {

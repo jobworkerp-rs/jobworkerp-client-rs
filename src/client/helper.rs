@@ -739,7 +739,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .find_runner_by_name(cx, metadata.clone(), runner_name)
                 .await?
             {
-                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
+                let result_descriptor =
+                    JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
                 let output = self
                     .setup_worker_and_enqueue_with_raw_output(
                         cx,
@@ -807,10 +808,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             )
                         },
                     )?;
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
-                    })?;
+                let args_descriptor =
+                    JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using).map_err(
+                        |e| anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}"),
+                    )?;
 
                 let runner_settings = if let Some(ope_desc) = runner_settings_descriptor {
                     tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
@@ -903,8 +904,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 data: Some(sdata),
             }) = runner_opt
             {
-                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)
-                    .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(
+                    &sdata, using,
+                )
+                .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
                 tracing::debug!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = if let Some(desc) = args_descriptor.clone() {
@@ -929,7 +932,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     )
                     .await?;
 
-                let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
+                let result_descriptor =
+                    JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
                 if let Some(desc) = result_descriptor {
                     match ProtobufDescriptor::get_message_from_bytes(desc, &output_bytes) {
                         Ok(m) => {
