@@ -1,7 +1,7 @@
 //! Display format definitions and enum formatting functionality
 
-use clap::ValueEnum;
 use crate::jobworkerp::data::StreamingOutputType;
+use clap::ValueEnum;
 
 /// Available display formats for CLI output
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

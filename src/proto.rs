@@ -36,21 +36,17 @@ fn get_method_schema<'a>(
 
     // If using is specified, find that method
     if let Some(method_name) = using {
-        return map
-            .schemas
-            .get(method_name)
-            .map(Some)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Method '{}' not found. Available: [{}]",
-                    method_name,
-                    map.schemas
-                        .keys()
-                        .map(|k| k.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            });
+        return map.schemas.get(method_name).map(Some).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Method '{}' not found. Available: [{}]",
+                method_name,
+                map.schemas
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        });
     }
 
     // If using is None, auto-select if only one method exists

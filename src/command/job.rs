@@ -70,7 +70,10 @@ pub enum JobCommand {
         priority: Option<PriorityArg>,
         #[clap(short, long)]
         timeout: Option<u64>,
-        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        #[clap(
+            long,
+            help = "Method name (required for multi-tool MCP/Plugin runners)"
+        )]
         using: Option<String>,
     },
     EnqueueForStream {
@@ -90,7 +93,10 @@ pub enum JobCommand {
         format: crate::display::DisplayFormat,
         #[clap(long)]
         no_truncate: bool,
-        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        #[clap(
+            long,
+            help = "Method name (required for multi-tool MCP/Plugin runners)"
+        )]
         using: Option<String>,
     },
     EnqueueWorkflow {
@@ -341,6 +347,16 @@ impl JobCommand {
                             );
                             item_count += 1;
                         }
+                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
+                            JobResultCommand::print_streaming_output(
+                                v.as_slice(),
+                                result_desc.clone(),
+                                format,
+                                &display_options,
+                                item_count,
+                            );
+                            item_count += 1;
+                        }
                         Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                             break;
                         }
@@ -490,6 +506,16 @@ impl JobCommand {
                     while let Ok(Some(item)) = response.message().await {
                         match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
+                                JobResultCommand::print_streaming_output(
+                                    v.as_slice(),
+                                    result_desc.clone(),
+                                    format,
+                                    &display_options,
+                                    item_count,
+                                );
+                                item_count += 1;
+                            }
+                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
                                 JobResultCommand::print_streaming_output(
                                     v.as_slice(),
                                     result_desc.clone(),

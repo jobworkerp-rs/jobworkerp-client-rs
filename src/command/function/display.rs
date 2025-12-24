@@ -1,4 +1,4 @@
-use crate::display::format::{StreamingOutputTypeFormatter, EnumFormatter};
+use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::display::DisplayFormat;
 use crate::jobworkerp::data::StreamingOutputType;
 use serde_json::{json, Value as JsonValue};
@@ -31,7 +31,10 @@ pub fn function_to_json(
             DisplayFormat::Json => json!(function.settings_schema),
             _ => {
                 if function.settings_schema.len() > 200 {
-                    json!(format!("{}... [truncated]", &function.settings_schema[..197]))
+                    json!(format!(
+                        "{}... [truncated]",
+                        &function.settings_schema[..197]
+                    ))
                 } else {
                     json!(function.settings_schema)
                 }
@@ -59,7 +62,10 @@ pub fn function_to_json(
                 DisplayFormat::Json => json!(method_schema.arguments_schema),
                 _ => {
                     if method_schema.arguments_schema.len() > 200 {
-                        json!(format!("{}... [truncated]", &method_schema.arguments_schema[..197]))
+                        json!(format!(
+                            "{}... [truncated]",
+                            &method_schema.arguments_schema[..197]
+                        ))
                     } else {
                         json!(method_schema.arguments_schema)
                     }
@@ -218,8 +224,12 @@ mod tests {
             "run".to_string(),
             MethodSchema {
                 description: Some("Test method description".to_string()),
-                arguments_schema: r#"{"type": "object", "properties": {"arg1": {"type": "string"}}}"#.to_string(),
-                result_schema: Some(r#"{"type": "object", "properties": {"result": {"type": "string"}}}"#.to_string()),
+                arguments_schema:
+                    r#"{"type": "object", "properties": {"arg1": {"type": "string"}}}"#.to_string(),
+                result_schema: Some(
+                    r#"{"type": "object", "properties": {"result": {"type": "string"}}}"#
+                        .to_string(),
+                ),
                 output_type: StreamingOutputType::Streaming as i32,
                 annotations: None,
             },
@@ -231,7 +241,8 @@ mod tests {
             worker_id: None,
             name: "test_function".to_string(),
             description: "Test function description".to_string(),
-            settings_schema: r#"{"type": "object", "properties": {"api_key": {"type": "string"}}}"#.to_string(),
+            settings_schema: r#"{"type": "object", "properties": {"api_key": {"type": "string"}}}"#
+                .to_string(),
             methods: Some(MethodSchemaMap { schemas }),
         };
 
@@ -251,7 +262,8 @@ mod tests {
             "fetch_html".to_string(),
             MethodSchema {
                 description: Some("Fetch HTML from URL".to_string()),
-                arguments_schema: r#"{"type": "object", "properties": {"url": {"type": "string"}}}"#.to_string(),
+                arguments_schema:
+                    r#"{"type": "object", "properties": {"url": {"type": "string"}}}"#.to_string(),
                 result_schema: Some(r#"{"type": "string"}"#.to_string()),
                 output_type: StreamingOutputType::NonStreaming as i32,
                 annotations: None,
@@ -262,7 +274,10 @@ mod tests {
             MethodSchema {
                 description: Some("Get current server time".to_string()),
                 arguments_schema: r#"{"type": "object"}"#.to_string(),
-                result_schema: Some(r#"{"type": "object", "properties": {"timestamp": {"type": "number"}}}"#.to_string()),
+                result_schema: Some(
+                    r#"{"type": "object", "properties": {"timestamp": {"type": "number"}}}"#
+                        .to_string(),
+                ),
                 output_type: StreamingOutputType::NonStreaming as i32,
                 annotations: None,
             },

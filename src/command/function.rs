@@ -353,15 +353,11 @@ impl FunctionCommand {
                 // Build request based on which ID is provided
                 let function_id_inner = if let Some(runner_id) = runner_id {
                     FunctionId {
-                        id: Some(function_id::Id::RunnerId(RunnerId {
-                            value: *runner_id,
-                        })),
+                        id: Some(function_id::Id::RunnerId(RunnerId { value: *runner_id })),
                     }
                 } else if let Some(worker_id) = worker_id {
                     FunctionId {
-                        id: Some(function_id::Id::WorkerId(WorkerId {
-                            value: *worker_id,
-                        })),
+                        id: Some(function_id::Id::WorkerId(WorkerId { value: *worker_id })),
                     }
                 } else {
                     unreachable!("Validation should have caught this case")
@@ -539,7 +535,10 @@ impl FunctionCommand {
                     println!("\t\t[description] {}", desc);
                 }
 
-                println!("\t\t[arguments_schema] |\n---\n{}", &method_schema.arguments_schema);
+                println!(
+                    "\t\t[arguments_schema] |\n---\n{}",
+                    &method_schema.arguments_schema
+                );
 
                 if let Some(result_schema) = &method_schema.result_schema {
                     println!("\t\t[result_schema] |\n---\n{}", result_schema);
@@ -549,9 +548,11 @@ impl FunctionCommand {
 
                 println!(
                     "\t\t[output_type] {}",
-                    crate::jobworkerp::data::StreamingOutputType::try_from(method_schema.output_type)
-                        .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
-                        .as_str_name()
+                    crate::jobworkerp::data::StreamingOutputType::try_from(
+                        method_schema.output_type
+                    )
+                    .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
+                    .as_str_name()
                 );
 
                 if let Some(annotations) = &method_schema.annotations {
@@ -585,9 +586,11 @@ impl FunctionCommand {
                     }
                     println!(
                         "\t\t\t[output_type] {}",
-                        crate::jobworkerp::data::StreamingOutputType::try_from(method_schema.output_type)
-                            .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
-                            .as_str_name()
+                        crate::jobworkerp::data::StreamingOutputType::try_from(
+                            method_schema.output_type
+                        )
+                        .unwrap_or(crate::jobworkerp::data::StreamingOutputType::NonStreaming)
+                        .as_str_name()
                     );
                 }
             }

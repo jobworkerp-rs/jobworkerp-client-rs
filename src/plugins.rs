@@ -1,6 +1,11 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
+/// Type alias for the collect_stream return type to reduce complexity
+pub type CollectStreamFuture = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(Vec<u8>, HashMap<String, String>)>> + Send>,
+>;
+
 /// Legacy PluginRunner trait (origin/main compatible)
 ///
 /// This trait maintains binary compatibility with plugins compiled against origin/main.
@@ -123,13 +128,7 @@ pub trait MultiMethodPluginRunner: Send + Sync {
     fn collect_stream(
         &self,
         stream: futures::stream::BoxStream<'static, crate::jobworkerp::data::ResultOutputItem>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(Vec<u8>, HashMap<String, String>)>>
-                + Send
-                + 'static,
-        >,
-    > {
+    ) -> CollectStreamFuture {
         use crate::jobworkerp::data::result_output_item;
         use futures::StreamExt;
 
@@ -141,6 +140,9 @@ pub trait MultiMethodPluginRunner: Send + Sync {
             while let Some(item) = stream.next().await {
                 match item.item {
                     Some(result_output_item::Item::Data(data)) => {
+                        last_data = Some(data);
+                    }
+                    Some(result_output_item::Item::FinalCollected(data)) => {
                         last_data = Some(data);
                     }
                     Some(result_output_item::Item::End(trailer)) => {

@@ -32,23 +32,24 @@ pub fn function_set_to_json(
                 .map(|target| {
                     use crate::jobworkerp::function::data::function_id;
 
-                    let (id_value, type_display) = match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
-                        Some(function_id::Id::RunnerId(rid)) => {
-                            let type_str = match format {
-                                DisplayFormat::Json => "RUNNER",
-                                _ => "🚀 RUNNER",
-                            };
-                            (rid.value, type_str.to_string())
-                        }
-                        Some(function_id::Id::WorkerId(wid)) => {
-                            let type_str = match format {
-                                DisplayFormat::Json => "WORKER",
-                                _ => "⚙️ WORKER",
-                            };
-                            (wid.value, type_str.to_string())
-                        }
-                        None => (0, "UNKNOWN".to_string()),
-                    };
+                    let (id_value, type_display) =
+                        match target.function_id.as_ref().and_then(|fid| fid.id.as_ref()) {
+                            Some(function_id::Id::RunnerId(rid)) => {
+                                let type_str = match format {
+                                    DisplayFormat::Json => "RUNNER",
+                                    _ => "🚀 RUNNER",
+                                };
+                                (rid.value, type_str.to_string())
+                            }
+                            Some(function_id::Id::WorkerId(wid)) => {
+                                let type_str = match format {
+                                    DisplayFormat::Json => "WORKER",
+                                    _ => "⚙️ WORKER",
+                                };
+                                (wid.value, type_str.to_string())
+                            }
+                            None => (0, "UNKNOWN".to_string()),
+                        };
 
                     json!({
                         "id": id_value,
