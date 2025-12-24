@@ -33,7 +33,7 @@ use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
         function::FunctionArg, function_set::FunctionSetArg, job::JobArg, job_result::JobResultArg,
-        runner::RunnerArg, worker::WorkerArg,
+        job_status::JobStatusArg, runner::RunnerArg, worker::WorkerArg,
     },
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -57,6 +57,7 @@ pub(crate) enum SubCommand {
     FunctionSet(FunctionSetArg),
     Job(JobArg),
     JobResult(JobResultArg),
+    JobStatus(JobStatusArg),
 }
 
 #[tokio::main]
@@ -103,6 +104,9 @@ async fn main() {
             cmd.cmd.execute(&client, Arc::new(metadata)).await;
         }
         SubCommand::JobResult(cmd) => {
+            cmd.cmd.execute(&client, &metadata).await;
+        }
+        SubCommand::JobStatus(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
         }
     }

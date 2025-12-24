@@ -399,7 +399,8 @@ impl JobResultCommand {
             .as_ref()
             .map(|d| d.worker_name.as_str())
             .unwrap_or("");
-        let result_proto = JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
+        let result_proto =
+            JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
 
         // Convert to JSON with proper formatting
         let job_result_json = job_result_to_json(&job_result, result_proto, format);
