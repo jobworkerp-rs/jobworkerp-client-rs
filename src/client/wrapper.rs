@@ -58,8 +58,8 @@ impl JobworkerpClientWrapper {
         workflow_url: &str,
         input: &str,
         channel: Option<&str>,
-        using: Option<&str>,
     ) -> Result<serde_json::Value> {
+        let using = Some("run");
         let job_args = json!({
             "workflow_url": workflow_url,
             "input": input,
@@ -68,7 +68,7 @@ impl JobworkerpClientWrapper {
             "channel": channel,
             "queue_type": "NORMAL",
             "store_success": false,
-            "store_failure": false,
+            "store_failure": true,
             "use_static": false,
         });
         tracing::debug!("execute_workflow: {:?}", job_args);
