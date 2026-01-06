@@ -76,15 +76,10 @@ impl JobworkerpClientWrapper {
             id: Some(_sid),
             data: Some(sdata),
         }) = self
-            .find_runner_by_name(
-                cx,
-                metadata.clone(),
-                RunnerType::InlineWorkflow.as_str_name(),
-            )
+            .find_runner_by_name(cx, metadata.clone(), RunnerType::Workflow.as_str_name())
             .await?
         {
-            // InlineWorkflow is a single-method runner, so using is None (auto-selected)
-            let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, None)?;
+            let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)?;
             let job_args = if let Some(desc) = args_descriptor.clone() {
                 JobworkerpProto::json_value_to_message(desc, &job_args, true)
             } else {
@@ -96,18 +91,17 @@ impl JobworkerpClientWrapper {
                 .setup_worker_and_enqueue_with_raw_output(
                     cx,
                     metadata,
-                    RunnerType::InlineWorkflow.as_str_name(),
+                    RunnerType::Workflow.as_str_name(),
                     vec![],
                     Some(worker_params),
                     job_args,
                     self.request_timeout()
                         .map(|t| t.as_secs() as u32)
                         .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC),
-                    using, // using: InlineWorkflow is single-method, auto-selected
+                    using,
                 )
                 .await?;
-            // InlineWorkflow is a single-method runner, so using is None (auto-selected)
-            let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, None)?;
+            let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&sdata, using)?;
             let output: Result<serde_json::Value> = if let Some(desc) = result_descriptor {
                 match ProtobufDescriptor::get_message_from_bytes(desc, &output) {
                     Ok(m) => {
@@ -131,8 +125,8 @@ impl JobworkerpClientWrapper {
             .map_err(|e| anyhow::anyhow!("Failed to parse output: {e:#?}"));
             output
         } else {
-            tracing::error!("runner not found: INLINE_WORKFLOW");
-            Err(anyhow::anyhow!("runner not found: INLINE_WORKFLOW"))
+            tracing::error!("runner not found: WORKFLOW");
+            Err(anyhow::anyhow!("runner not found: WORKFLOW"))
         }
     }
 }
