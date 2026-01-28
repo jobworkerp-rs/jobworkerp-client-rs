@@ -14,7 +14,7 @@ anyhow = "1"
 atty = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
-comfy-table = "7.1"
+comfy-table = "7.2"
 yansi = "1.0"
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
 memory-utils = { git = "https://github.com/sutr-app/memory-utils.git", branch = "main" }
