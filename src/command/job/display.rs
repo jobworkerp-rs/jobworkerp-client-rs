@@ -96,14 +96,11 @@ pub fn job_to_json(
     }
 
     // Add protobuf arguments as-is (using existing message_to_json_value)
-    if let (Some(data), Some(descriptor)) = (job.data.as_ref(), args_descriptor) {
-        if let Ok(args_message) = ProtobufDescriptor::get_message_from_bytes(descriptor, &data.args)
-        {
-            if let Ok(args_json) = ProtobufDescriptor::message_to_json_value(&args_message) {
+    if let (Some(data), Some(descriptor)) = (job.data.as_ref(), args_descriptor)
+        && let Ok(args_message) = ProtobufDescriptor::get_message_from_bytes(descriptor, &data.args)
+            && let Ok(args_json) = ProtobufDescriptor::message_to_json_value(&args_message) {
                 job_json["arguments"] = args_json;
             }
-        }
-    }
 
     job_json
 }

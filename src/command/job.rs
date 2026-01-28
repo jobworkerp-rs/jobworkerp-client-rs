@@ -256,14 +256,13 @@ impl JobCommand {
                             data.worker_name,
                             data.status().as_str_name()
                         );
-                        if let Some(output) = &data.output {
-                            if !output.items.is_empty() {
+                        if let Some(output) = &data.output
+                            && !output.items.is_empty() {
                                 JobResultCommand::print_job_result_output(
                                     &output.items,
                                     result_desc,
                                 );
                             }
-                        }
                     }
                 } else {
                     println!("{response:#?}");
@@ -422,15 +421,14 @@ impl JobCommand {
                         use_static: false,
                         ..Default::default()
                     };
-                    let args = if let Some(args_descriptor) =
-                        JobworkerpProto::parse_job_args_schema_descriptor(&rdata, None)
+                    let args = match JobworkerpProto::parse_job_args_schema_descriptor(&rdata, None)
                             .map_err(|e| {
                                 anyhow::anyhow!(
                                     "Failed to parse job_args schema descriptor: {e:#?}"
                                 )
                             })
                             .unwrap()
-                    {
+                    { Some(args_descriptor) => {
                         let context = context.as_deref().unwrap_or("");
                         let job_args = serde_json::json!({
                             "workflow_url": serde_json::Value::String(workflow_file.clone()),
@@ -445,10 +443,10 @@ impl JobCommand {
                                 anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
                             })
                             .unwrap()
-                    } else {
+                    } _ => {
                         println!("args_descriptor not found");
                         return;
-                    };
+                    }};
                     let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, None)
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
@@ -545,8 +543,8 @@ impl JobCommand {
                     // Also check trailers for completeness
                     match response.trailers().await {
                         Ok(Some(trailers)) => {
-                            if !trailers.is_empty() {
-                                if let Some(_trailer_result) =
+                            if !trailers.is_empty()
+                                && let Some(_trailer_result) =
                                     trailers.get_bin(JOB_RESULT_HEADER_NAME)
                                 {
                                     println!("Trailer job result header found");
@@ -555,7 +553,6 @@ impl JobCommand {
                                         result_desc.clone(),
                                     );
                                 }
-                            }
                         }
                         Ok(None) => {
                             println!("No trailers found");

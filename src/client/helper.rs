@@ -826,15 +826,15 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     vec![]
                 };
                 tracing::debug!("job args: {:#?}", &job_args);
-                let job_args = if let Some(desc) = args_descriptor.clone() {
+                let job_args = match args_descriptor.clone() { Some(desc) => {
                     JobworkerpProto::json_value_to_message(desc, &job_args, true)
                         .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {e:#?}"))?
-                } else {
+                } _ => {
                     serde_json::to_string(&job_args)
                         .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {e:#?}"))?
                         .as_bytes()
                         .to_vec()
-                };
+                }};
                 self.setup_worker_and_enqueue(
                     cx,
                     metadata,
@@ -910,14 +910,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
                 tracing::debug!("job args (json): {:#?}", &job_args);
-                let job_args_bytes = if let Some(desc) = args_descriptor.clone() {
+                let job_args_bytes = match args_descriptor.clone() { Some(desc) => {
                     JobworkerpProto::json_value_to_message(desc, &job_args, true)
                         .map_err(|e| anyhow!("Failed to parse job_args schema: {e:#?}"))?
-                } else {
+                } _ => {
                     serde_json::to_string(&job_args)
                         .map_err(|e| anyhow!("Failed to serialize job_args: {e:#?}"))?
                         .into_bytes()
-                };
+                }};
 
                 let output_bytes = self
                     .enqueue_and_get_output_worker_job(
