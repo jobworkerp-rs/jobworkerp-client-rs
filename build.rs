@@ -23,6 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "protobuf/jobworkerp/service/worker.proto",
                 "protobuf/jobworkerp/service/job.proto",
                 "protobuf/jobworkerp/service/job_result.proto",
+                // worker instance
+                "protobuf/jobworkerp/data/worker_instance.proto",
+                "protobuf/jobworkerp/service/worker_instance.proto",
                 // functions
                 "protobuf/jobworkerp/function/data/function_set.proto",
                 "protobuf/jobworkerp/function/data/function.proto",
