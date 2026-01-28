@@ -16,11 +16,11 @@ use std::{
 
 use super::WorkerIdOrName;
 use crate::{
-    client::{helper::UseJobworkerpClientHelper, UseJobworkerpClient},
+    client::{UseJobworkerpClient, helper::UseJobworkerpClientHelper},
     command::{job_result::JobResultCommand, to_request},
     display::{
-        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-        JsonVisualizer, TableVisualizer,
+        CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer,
+        utils::supports_color,
     },
     jobworkerp::{
         self,
@@ -29,8 +29,8 @@ use crate::{
             WorkerData,
         },
         service::{
-            job_request, CountCondition, FindListRequest, FindListWithProcessingStatusRequest,
-            JobRequest,
+            CountCondition, FindListRequest, FindListWithProcessingStatusRequest, JobRequest,
+            job_request,
         },
     },
     proto::JobworkerpProto,
@@ -40,7 +40,7 @@ use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::trace::Tracing;
 use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
-use opentelemetry::{global, trace::Span, Context};
+use opentelemetry::{Context, global, trace::Span};
 use prost::Message;
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
@@ -257,12 +257,10 @@ impl JobCommand {
                             data.status().as_str_name()
                         );
                         if let Some(output) = &data.output
-                            && !output.items.is_empty() {
-                                JobResultCommand::print_job_result_output(
-                                    &output.items,
-                                    result_desc,
-                                );
-                            }
+                            && !output.items.is_empty()
+                        {
+                            JobResultCommand::print_job_result_output(&output.items, result_desc);
+                        }
                     }
                 } else {
                     println!("{response:#?}");
@@ -422,31 +420,32 @@ impl JobCommand {
                         ..Default::default()
                     };
                     let args = match JobworkerpProto::parse_job_args_schema_descriptor(&rdata, None)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to parse job_args schema descriptor: {e:#?}"
-                                )
-                            })
-                            .unwrap()
-                    { Some(args_descriptor) => {
-                        let context = context.as_deref().unwrap_or("");
-                        let job_args = serde_json::json!({
-                            "workflow_url": serde_json::Value::String(workflow_file.clone()),
-                            "input": serde_json::Value::String(input.clone()),
-                            // serde_json::from_str::<serde_json::Value>(input.as_str())
-                            //     .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
-                            "workflow_context": context,
-                        });
-                        JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
-                            .map_err(|e| {
-                                println!("Failed to parse job_args schema: {:#?}", &e);
-                                anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
-                            })
-                            .unwrap()
-                    } _ => {
-                        println!("args_descriptor not found");
-                        return;
-                    }};
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
+                        })
+                        .unwrap()
+                    {
+                        Some(args_descriptor) => {
+                            let context = context.as_deref().unwrap_or("");
+                            let job_args = serde_json::json!({
+                                "workflow_url": serde_json::Value::String(workflow_file.clone()),
+                                "input": serde_json::Value::String(input.clone()),
+                                // serde_json::from_str::<serde_json::Value>(input.as_str())
+                                //     .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
+                                "workflow_context": context,
+                            });
+                            JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
+                                .map_err(|e| {
+                                    println!("Failed to parse job_args schema: {:#?}", &e);
+                                    anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
+                                })
+                                .unwrap()
+                        }
+                        _ => {
+                            println!("args_descriptor not found");
+                            return;
+                        }
+                    };
                     let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, None)
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
@@ -546,13 +545,13 @@ impl JobCommand {
                             if !trailers.is_empty()
                                 && let Some(_trailer_result) =
                                     trailers.get_bin(JOB_RESULT_HEADER_NAME)
-                                {
-                                    println!("Trailer job result header found");
-                                    JobResultCommand::print_job_result_metadata(
-                                        &trailers,
-                                        result_desc.clone(),
-                                    );
-                                }
+                            {
+                                println!("Trailer job result header found");
+                                JobResultCommand::print_job_result_metadata(
+                                    &trailers,
+                                    result_desc.clone(),
+                                );
+                            }
                         }
                         Ok(None) => {
                             println!("No trailers found");
