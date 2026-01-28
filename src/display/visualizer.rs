@@ -4,7 +4,7 @@
 //! card, and JSON output formats.
 
 use crate::display::utils::{format_json_hierarchy, truncate_string};
-use crate::display::{format::color, DisplayOptions};
+use crate::display::{DisplayOptions, format::color};
 use comfy_table::{Attribute, Cell, ColumnConstraint, ContentArrangement, Table, Width};
 use serde_json::Value as JsonValue;
 

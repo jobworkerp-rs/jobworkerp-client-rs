@@ -3,7 +3,7 @@
 //! This module handles the conversion of Worker data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
-use crate::display::{format::EnumFormatter, DisplayFormat};
+use crate::display::{DisplayFormat, format::EnumFormatter};
 use crate::jobworkerp::data::{QueueType, ResponseType, Worker};
 use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;

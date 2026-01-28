@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use super::{to_request, WorkerIdOrName};
+use super::{WorkerIdOrName, to_request};
 use crate::jobworkerp;
 use crate::jobworkerp::data::{JobId, JobResult, JobResultId};
 use crate::jobworkerp::service::{
@@ -248,8 +248,8 @@ impl JobResultCommand {
             } => {
                 use self::display::job_result_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let request = FindJobResultListRequest {
@@ -317,8 +317,8 @@ impl JobResultCommand {
             } => {
                 use self::display::job_result_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let request = jobworkerp::service::FindListByJobIdRequest {
@@ -408,8 +408,8 @@ impl JobResultCommand {
     ) {
         use self::display::job_result_to_json;
         use crate::display::{
-            utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-            JsonVisualizer, TableVisualizer,
+            CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer,
+            utils::supports_color,
         };
 
         let worker_name = job_result

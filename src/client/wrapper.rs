@@ -85,11 +85,10 @@ impl JobworkerpClientWrapper {
         {
             // InlineWorkflow is a single-method runner, so using is None (auto-selected)
             let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, None)?;
-            let job_args = match args_descriptor.clone() { Some(desc) => {
-                JobworkerpProto::json_value_to_message(desc, &job_args, true)
-            } _ => {
-                Ok(job_args.to_string().as_bytes().to_vec())
-            }}
+            let job_args = match args_descriptor.clone() {
+                Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true),
+                _ => Ok(job_args.to_string().as_bytes().to_vec()),
+            }
             .inspect_err(|e| tracing::warn!("Failed to parse job_args: {:#?}", e))?;
 
             let output = self

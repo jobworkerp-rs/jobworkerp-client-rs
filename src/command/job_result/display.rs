@@ -3,7 +3,7 @@
 //! This module handles the conversion of JobResult data structures to JSON format
 //! with appropriate enum decoration and streaming output support.
 
-use crate::display::{format::EnumFormatter, DisplayFormat};
+use crate::display::{DisplayFormat, format::EnumFormatter};
 use crate::jobworkerp::data::{JobResult, ResultStatus};
 use chrono::DateTime;
 use command_utils::protobuf::ProtobufDescriptor;

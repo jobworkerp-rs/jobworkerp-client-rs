@@ -16,8 +16,8 @@ use crate::{
     client::helper::DEFAULT_RETRY_POLICY,
     command::to_request,
     display::{
-        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-        JsonVisualizer, TableVisualizer,
+        CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer,
+        utils::supports_color,
     },
     jobworkerp::{
         self,
@@ -26,7 +26,7 @@ use crate::{
     },
     proto::JobworkerpProto,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
 // use command_utils::protobuf::ProtobufDescriptor;
 use std::{collections::HashMap, process::exit};

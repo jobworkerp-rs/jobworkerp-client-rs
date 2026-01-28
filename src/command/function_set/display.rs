@@ -1,5 +1,5 @@
 use crate::display::DisplayFormat;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 
 /// Convert FunctionSet to JSON format for display
 pub fn function_set_to_json(
@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use crate::jobworkerp::{
         data::{RunnerId, WorkerId},
-        function::data::{function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId},
+        function::data::{FunctionId, FunctionSet, FunctionSetData, FunctionSetId, function_id},
     };
 
     #[test]
