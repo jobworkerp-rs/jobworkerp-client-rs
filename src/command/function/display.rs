@@ -89,8 +89,8 @@ pub fn function_to_json(
                 .unwrap_or(StreamingOutputType::NonStreaming);
             json_obj["output_type"] = json!(formatter.format(output_type, format));
 
-            if let Some(annotations) = &method_schema.annotations {
-                if matches!(format, DisplayFormat::Json) {
+            if let Some(annotations) = &method_schema.annotations
+                && matches!(format, DisplayFormat::Json) {
                     let mut ann_obj = json!({});
                     if let Some(title) = &annotations.title {
                         ann_obj["title"] = json!(title);
@@ -109,7 +109,6 @@ pub fn function_to_json(
                     }
                     json_obj["annotations"] = ann_obj;
                 }
-            }
         } else {
             // Multiple methods - summary view (sorted alphabetically)
             json_obj["method_count"] = json!(method_count);
