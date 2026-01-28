@@ -19,9 +19,10 @@ fn format_timestamp(millis: i64, format: &DisplayFormat) -> JsonValue {
 
 pub fn worker_instance_to_json(instance: &WorkerInstance, format: &DisplayFormat) -> JsonValue {
     let id = instance.id.as_ref().map(|id| id.value);
-    let (ip_address, hostname, channels, registered_at, last_heartbeat) =
-        if let Some(data) = &instance.data {
-            let channels: Vec<JsonValue> = data
+    let (ip_address, hostname, channels, registered_at, last_heartbeat) = if let Some(data) =
+        &instance.data
+    {
+        let channels: Vec<JsonValue> = data
                 .channels
                 .iter()
                 .map(|ch| {
@@ -31,16 +32,16 @@ pub fn worker_instance_to_json(instance: &WorkerInstance, format: &DisplayFormat
                     })
                 })
                 .collect();
-            (
-                Some(data.ip_address.clone()),
-                data.hostname.clone(),
-                channels,
-                Some(format_timestamp(data.registered_at, format)),
-                Some(format_timestamp(data.last_heartbeat, format)),
-            )
-        } else {
-            (None, None, vec![], None, None)
-        };
+        (
+            Some(data.ip_address.clone()),
+            data.hostname.clone(),
+            channels,
+            Some(format_timestamp(data.registered_at, format)),
+            Some(format_timestamp(data.last_heartbeat, format)),
+        )
+    } else {
+        (None, None, vec![], None, None)
+    };
 
     serde_json::json!({
         "id": id,
