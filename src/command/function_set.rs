@@ -13,7 +13,7 @@ use crate::{
         data::{RunnerId, WorkerId},
         function::{
             data::{
-                function_id, FunctionId, FunctionSet, FunctionSetData, FunctionSetId, FunctionUsing,
+                FunctionId, FunctionSet, FunctionSetData, FunctionSetId, FunctionUsing, function_id,
             },
             service::FindByNameRequest,
         },
@@ -134,8 +134,8 @@ impl FunctionSetCommand {
             } => {
                 use self::display::function_set_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let request = FindByNameRequest { name: name.clone() };
@@ -183,8 +183,8 @@ impl FunctionSetCommand {
             } => {
                 use self::display::function_set_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let response = client

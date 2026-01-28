@@ -3,7 +3,7 @@
 //! This module handles the conversion of Job data structures to JSON format
 //! with appropriate enum decoration based on display format.
 
-use crate::display::{format::EnumFormatter, DisplayFormat};
+use crate::display::{DisplayFormat, format::EnumFormatter};
 use crate::jobworkerp::data::{Job, JobProcessingStatus, Priority};
 use chrono::DateTime;
 use command_utils::protobuf::ProtobufDescriptor;
@@ -98,9 +98,10 @@ pub fn job_to_json(
     // Add protobuf arguments as-is (using existing message_to_json_value)
     if let (Some(data), Some(descriptor)) = (job.data.as_ref(), args_descriptor)
         && let Ok(args_message) = ProtobufDescriptor::get_message_from_bytes(descriptor, &data.args)
-            && let Ok(args_json) = ProtobufDescriptor::message_to_json_value(&args_message) {
-                job_json["arguments"] = args_json;
-            }
+        && let Ok(args_json) = ProtobufDescriptor::message_to_json_value(&args_message)
+    {
+        job_json["arguments"] = args_json;
+    }
 
     job_json
 }
@@ -227,9 +228,11 @@ mod tests {
         let result = job_to_json(&job, None, None, &DisplayFormat::Json);
 
         // run_after should be formatted timestamp when run_after_time is not 0
-        assert!(result["run_after"]
-            .as_str()
-            .unwrap()
-            .contains("2022-01-20T12:00:00"));
+        assert!(
+            result["run_after"]
+                .as_str()
+                .unwrap()
+                .contains("2022-01-20T12:00:00")
+        );
     }
 }

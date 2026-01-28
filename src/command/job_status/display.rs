@@ -3,8 +3,8 @@
 //! This module handles the conversion of JobProcessingStatus data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
-use crate::display::format::EnumFormatter;
 use crate::display::DisplayFormat;
+use crate::display::format::EnumFormatter;
 use crate::jobworkerp::data::JobProcessingStatus;
 use crate::jobworkerp::service::{JobProcessingStatusDetailResponse, JobProcessingStatusResponse};
 use chrono::{DateTime, Utc};

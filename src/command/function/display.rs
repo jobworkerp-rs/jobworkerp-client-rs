@@ -1,7 +1,7 @@
-use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::display::DisplayFormat;
+use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::jobworkerp::data::StreamingOutputType;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 
 /// Convert Function to JSON format for display
 pub fn function_to_json(
@@ -90,25 +90,26 @@ pub fn function_to_json(
             json_obj["output_type"] = json!(formatter.format(output_type, format));
 
             if let Some(annotations) = &method_schema.annotations
-                && matches!(format, DisplayFormat::Json) {
-                    let mut ann_obj = json!({});
-                    if let Some(title) = &annotations.title {
-                        ann_obj["title"] = json!(title);
-                    }
-                    if let Some(read_only) = annotations.read_only_hint {
-                        ann_obj["read_only_hint"] = json!(read_only);
-                    }
-                    if let Some(destructive) = annotations.destructive_hint {
-                        ann_obj["destructive_hint"] = json!(destructive);
-                    }
-                    if let Some(idempotent) = annotations.idempotent_hint {
-                        ann_obj["idempotent_hint"] = json!(idempotent);
-                    }
-                    if let Some(open_world) = annotations.open_world_hint {
-                        ann_obj["open_world_hint"] = json!(open_world);
-                    }
-                    json_obj["annotations"] = ann_obj;
+                && matches!(format, DisplayFormat::Json)
+            {
+                let mut ann_obj = json!({});
+                if let Some(title) = &annotations.title {
+                    ann_obj["title"] = json!(title);
                 }
+                if let Some(read_only) = annotations.read_only_hint {
+                    ann_obj["read_only_hint"] = json!(read_only);
+                }
+                if let Some(destructive) = annotations.destructive_hint {
+                    ann_obj["destructive_hint"] = json!(destructive);
+                }
+                if let Some(idempotent) = annotations.idempotent_hint {
+                    ann_obj["idempotent_hint"] = json!(idempotent);
+                }
+                if let Some(open_world) = annotations.open_world_hint {
+                    ann_obj["open_world_hint"] = json!(open_world);
+                }
+                json_obj["annotations"] = ann_obj;
+            }
         } else {
             // Multiple methods - summary view (sorted alphabetically)
             json_obj["method_count"] = json!(method_count);

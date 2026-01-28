@@ -7,8 +7,8 @@ use crate::{
     jobworkerp::function::{
         data::{FunctionCallOptions, FunctionId, FunctionResult, FunctionSpecs, WorkerOptions},
         service::{
-            function_call_request, FindFunctionByNameRequest, FindFunctionRequest,
-            FindFunctionSetRequest, FunctionCallRequest, RunnerParameters,
+            FindFunctionByNameRequest, FindFunctionRequest, FindFunctionSetRequest,
+            FunctionCallRequest, RunnerParameters, function_call_request,
         },
     },
 };
@@ -120,8 +120,8 @@ impl FunctionCommand {
                 };
                 use self::display::function_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let response = client
@@ -175,8 +175,8 @@ impl FunctionCommand {
             } => {
                 use self::display::function_to_json;
                 use crate::display::{
-                    utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
-                    JsonVisualizer, TableVisualizer,
+                    CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
+                    TableVisualizer, utils::supports_color,
                 };
 
                 let request = FindFunctionSetRequest { name: name.clone() };
@@ -348,7 +348,7 @@ impl FunctionCommand {
                     return;
                 }
 
-                use crate::jobworkerp::function::data::{function_id, FunctionUsing};
+                use crate::jobworkerp::function::data::{FunctionUsing, function_id};
 
                 // Build request based on which ID is provided
                 let function_id_inner = if let Some(runner_id) = runner_id {
@@ -382,8 +382,8 @@ impl FunctionCommand {
                     Some(specs) => {
                         use self::display::function_to_json;
                         use crate::display::{
-                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer,
-                            DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
+                            CardVisualizer, DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
+                            utils::supports_color, visualizer::JsonVisualizer,
                         };
 
                         // Convert to JSON and display
@@ -465,8 +465,8 @@ impl FunctionCommand {
                     Some(specs) => {
                         use self::display::function_to_json;
                         use crate::display::{
-                            utils::supports_color, visualizer::JsonVisualizer, CardVisualizer,
-                            DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
+                            CardVisualizer, DisplayOptions, JsonPrettyVisualizer, TableVisualizer,
+                            utils::supports_color, visualizer::JsonVisualizer,
                         };
 
                         // Convert to JSON and display

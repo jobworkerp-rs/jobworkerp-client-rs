@@ -3,8 +3,8 @@
 //! This module handles the conversion of Runner data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
-use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::display::DisplayFormat;
+use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::jobworkerp::data::{Runner, RunnerType};
 use serde_json::Value as JsonValue;
 

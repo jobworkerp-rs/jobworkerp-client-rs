@@ -223,44 +223,50 @@ impl JobworkerpProto {
             .unwrap()
             .into_inner()
             .data
-        { Some(Worker {
-            id: Some(_wid),
-            data: Some(wdata),
-        }) => {
-            tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
-            match client
-                .runner_client()
-                .await
-                .find(wdata.runner_id.unwrap())
-                .await
-                .unwrap()
-                .into_inner()
-                .data
-            { Some(Runner {
-                id: Some(_sid),
-                data: Some(sdata),
+        {
+            Some(Worker {
+                id: Some(_wid),
+                data: Some(wdata),
             }) => {
-                tracing::debug!("runner for worker {} found: {:#?}", worker_name, &sdata);
-                // Use method_proto_map instead of result_output_proto
-                match Self::parse_result_schema_descriptor(&sdata, using) {
-                    Ok(Some(descriptor)) => Some(descriptor),
-                    Ok(None) => {
-                        tracing::debug!("no result schema for worker: {}", worker_name);
-                        None
+                tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
+                match client
+                    .runner_client()
+                    .await
+                    .find(wdata.runner_id.unwrap())
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .data
+                {
+                    Some(Runner {
+                        id: Some(_sid),
+                        data: Some(sdata),
+                    }) => {
+                        tracing::debug!("runner for worker {} found: {:#?}", worker_name, &sdata);
+                        // Use method_proto_map instead of result_output_proto
+                        match Self::parse_result_schema_descriptor(&sdata, using) {
+                            Ok(Some(descriptor)) => Some(descriptor),
+                            Ok(None) => {
+                                tracing::debug!("no result schema for worker: {}", worker_name);
+                                None
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to parse result schema: {:#?}", e);
+                                None
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!("failed to parse result schema: {:#?}", e);
+                    _ => {
+                        tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
                         None
                     }
                 }
-            } _ => {
-                tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
+            }
+            _ => {
+                tracing::warn!("worker not found: {:#?}", &worker_name);
                 None
-            }}
-        } _ => {
-            tracing::warn!("worker not found: {:#?}", &worker_name);
-            None
-        }}
+            }
+        }
     }
     pub async fn resolve_result_output_to_json(
         client: &crate::client::JobworkerpClient,
