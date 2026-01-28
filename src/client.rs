@@ -10,7 +10,9 @@ use crate::jobworkerp::service::{
     job_processing_status_service_client::JobProcessingStatusServiceClient,
     job_restore_service_client::JobRestoreServiceClient,
     job_result_service_client::JobResultServiceClient, job_service_client::JobServiceClient,
-    runner_service_client::RunnerServiceClient, worker_service_client::WorkerServiceClient,
+    runner_service_client::RunnerServiceClient,
+    worker_instance_service_client::WorkerInstanceServiceClient,
+    worker_service_client::WorkerServiceClient,
 };
 use anyhow::Result;
 use std::time::Duration;
@@ -71,6 +73,12 @@ impl JobworkerpClient {
     pub async fn job_result_client(&self) -> JobResultServiceClient<tonic::transport::Channel> {
         let cell = self.connection.read_channel().await;
         JobResultServiceClient::new(cell.clone()).max_decoding_message_size(128 * 1024 * 1024)
+    }
+    pub async fn worker_instance_client(
+        &self,
+    ) -> WorkerInstanceServiceClient<tonic::transport::Channel> {
+        let cell = self.connection.read_channel().await;
+        WorkerInstanceServiceClient::new(cell.clone())
     }
 }
 

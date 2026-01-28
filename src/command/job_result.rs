@@ -39,6 +39,8 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        using: Option<String>,
         #[clap(long, value_enum, default_value = "card")]
         format: crate::display::DisplayFormat,
         #[clap(long)]
@@ -51,6 +53,8 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
+        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        using: Option<String>,
         #[clap(long, value_enum, default_value = "card")]
         format: crate::display::DisplayFormat,
         #[clap(long)]
@@ -123,6 +127,7 @@ impl JobResultCommand {
                 job_id,
                 worker,
                 timeout,
+                using,
                 format,
                 no_truncate,
             } => {
@@ -130,6 +135,7 @@ impl JobResultCommand {
                     job_id: Some(JobId { value: *job_id }),
                     worker: Some(worker.to_listen_worker()),
                     timeout: *timeout,
+                    using: using.clone(),
                 };
                 let response = client
                     .job_result_client()
@@ -144,19 +150,25 @@ impl JobResultCommand {
                 job_id,
                 worker,
                 timeout,
+                using,
                 format,
                 no_truncate,
             } => {
                 let req = worker.to_job_worker();
                 let (_, _args_desc, result_desc) =
-                    JobworkerpProto::find_runner_descriptors_by_worker(client, req, None)
-                        .await
-                        .unwrap();
+                    JobworkerpProto::find_runner_descriptors_by_worker(
+                        client,
+                        req,
+                        using.as_deref(),
+                    )
+                    .await
+                    .unwrap();
 
                 let req = ListenRequest {
                     job_id: Some(JobId { value: *job_id }),
                     worker: Some(worker.to_listen_worker()),
                     timeout: *timeout,
+                    using: using.clone(),
                 };
                 let response = client
                     .job_result_client()
