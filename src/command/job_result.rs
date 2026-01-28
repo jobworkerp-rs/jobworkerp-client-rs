@@ -39,7 +39,10 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
-        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        #[clap(
+            long,
+            help = "Method name (required for multi-tool MCP/Plugin runners)"
+        )]
         using: Option<String>,
         #[clap(long, value_enum, default_value = "card")]
         format: crate::display::DisplayFormat,
@@ -53,7 +56,10 @@ pub enum JobResultCommand {
         worker: WorkerIdOrName,
         #[clap(short, long)]
         timeout: Option<u64>,
-        #[clap(long, help = "Method name (required for multi-tool MCP/Plugin runners)")]
+        #[clap(
+            long,
+            help = "Method name (required for multi-tool MCP/Plugin runners)"
+        )]
         using: Option<String>,
         #[clap(long, value_enum, default_value = "card")]
         format: crate::display::DisplayFormat,

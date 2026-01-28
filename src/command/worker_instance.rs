@@ -4,8 +4,8 @@ use crate::{
     client::JobworkerpClient,
     command::to_request,
     display::{
-        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer,
-        TableVisualizer,
+        utils::supports_color, CardVisualizer, DisplayOptions, JsonPrettyVisualizer,
+        JsonVisualizer, TableVisualizer,
     },
     jobworkerp::{
         data::{Empty, WorkerInstanceId},
