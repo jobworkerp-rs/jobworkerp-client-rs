@@ -213,10 +213,7 @@ impl JobworkerpProto {
         worker_name: &str,
         using: Option<&str>,
     ) -> Option<MessageDescriptor> {
-        if let Some(Worker {
-            id: Some(_wid),
-            data: Some(wdata),
-        }) = client
+        match client
             .worker_client()
             .await
             .find_by_name(WorkerNameRequest {
@@ -226,12 +223,12 @@ impl JobworkerpProto {
             .unwrap()
             .into_inner()
             .data
-        {
+        { Some(Worker {
+            id: Some(_wid),
+            data: Some(wdata),
+        }) => {
             tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
-            if let Some(Runner {
-                id: Some(_sid),
-                data: Some(sdata),
-            }) = client
+            match client
                 .runner_client()
                 .await
                 .find(wdata.runner_id.unwrap())
@@ -239,7 +236,10 @@ impl JobworkerpProto {
                 .unwrap()
                 .into_inner()
                 .data
-            {
+            { Some(Runner {
+                id: Some(_sid),
+                data: Some(sdata),
+            }) => {
                 tracing::debug!("runner for worker {} found: {:#?}", worker_name, &sdata);
                 // Use method_proto_map instead of result_output_proto
                 match Self::parse_result_schema_descriptor(&sdata, using) {
@@ -253,14 +253,14 @@ impl JobworkerpProto {
                         None
                     }
                 }
-            } else {
+            } _ => {
                 tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
                 None
-            }
-        } else {
+            }}
+        } _ => {
             tracing::warn!("worker not found: {:#?}", &worker_name);
             None
-        }
+        }}
     }
     pub async fn resolve_result_output_to_json(
         client: &crate::client::JobworkerpClient,

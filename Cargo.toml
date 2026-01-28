@@ -2,7 +2,7 @@
 name = "jobworkerp-client"
 version = "0.14.1"
 authors = ["sutr-app"]
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "jobworkerp-client"
