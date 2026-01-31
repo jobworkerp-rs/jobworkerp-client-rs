@@ -825,7 +825,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     tracing::debug!("runner settings schema empty");
                     vec![]
                 };
-                tracing::debug!("job args: {:#?}", &job_args);
+                tracing::trace!("job args: {:#?}", &job_args);
                 let job_args = match args_descriptor.clone() {
                     Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
                         .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {e:#?}"))?,
@@ -908,7 +908,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 )
                 .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
-                tracing::debug!("job args (json): {:#?}", &job_args);
+                tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor.clone() {
                     Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
                         .map_err(|e| anyhow!("Failed to parse job_args schema: {e:#?}"))?,
