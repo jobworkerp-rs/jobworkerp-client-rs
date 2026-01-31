@@ -11,12 +11,12 @@ use crate::jobworkerp::service::{
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{Context, Result, anyhow};
-use prost_reflect::MessageDescriptor;
 use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
 use command_utils::util::datetime;
 use command_utils::util::scoped_cache::ScopedCache;
+use prost_reflect::MessageDescriptor;
 use rand;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
@@ -32,7 +32,11 @@ pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
 };
 
 /// Build WorkerData with default settings from runner
-fn build_worker_data_default(name: &str, runner_id: RunnerId, runner_settings: Vec<u8>) -> WorkerData {
+fn build_worker_data_default(
+    name: &str,
+    runner_id: RunnerId,
+    runner_settings: Vec<u8>,
+) -> WorkerData {
     WorkerData {
         name: name.to_string(),
         description: String::new(),
@@ -116,7 +120,9 @@ fn build_job_request(
     JobRequest {
         args,
         timeout: Some((timeout_sec * 1000).into()),
-        worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(worker_id)),
+        worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
+            worker_id,
+        )),
         priority: priority.map(|p| p as i32),
         run_after_time,
         using: using.map(|s| s.to_string()),
@@ -133,17 +139,18 @@ fn decode_output_to_json(
         match ProtobufDescriptor::get_message_from_bytes(desc.clone(), output) {
             Ok(m) => {
                 let j = ProtobufDescriptor::message_to_json(&m)?;
-                tracing::debug!(
-                    "Result schema exists. decode message with proto: {:#?}",
-                    j
-                );
+                tracing::debug!("Result schema exists. decode message with proto: {:#?}", j);
                 serde_json::from_str(j.as_str())
                     .map_err(|e| anyhow!("Failed to parse JSON from protobuf message: {e:#?}"))
             }
             Err(e) => {
-                tracing::warn!("Failed to parse result with proto schema: {:#?}. Trying direct JSON parse.", e);
-                serde_json::from_slice(output)
-                    .map_err(|e_slice| anyhow!("Failed to parse output as JSON (slice): {e_slice:#?}"))
+                tracing::warn!(
+                    "Failed to parse result with proto schema: {:#?}. Trying direct JSON parse.",
+                    e
+                );
+                serde_json::from_slice(output).map_err(|e_slice| {
+                    anyhow!("Failed to parse output as JSON (slice): {e_slice:#?}")
+                })
             }
         }
     } else {
@@ -574,7 +581,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let worker_id = worker
                 .id
                 .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?;
-            let job_request_payload = build_job_request(worker_id, args, timeout_sec, run_after_time, priority, using);
+            let job_request_payload = build_job_request(
+                worker_id,
+                args,
+                timeout_sec,
+                run_after_time,
+                priority,
+                using,
+            );
             let tonic_request = tonic::Request::new(job_request_payload);
             let client_clone = self.jobworkerp_client().clone();
 
@@ -623,7 +637,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let worker_id = worker
                 .id
                 .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?;
-            let job_request_payload = build_job_request(worker_id, args, timeout_sec, run_after_time, priority, using);
+            let job_request_payload = build_job_request(
+                worker_id,
+                args,
+                timeout_sec,
+                run_after_time,
+                priority,
+                using,
+            );
             let tonic_request = tonic::Request::new(job_request_payload);
             let client_clone = self.jobworkerp_client().clone();
             let metadata_clone = metadata.clone();
@@ -716,7 +737,32 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
-    /// Create WorkerData from runner settings and optional JSON parameters
+    /// Create WorkerData from runner ID and settings
+    fn create_worker_with_runner_id(
+        &self,
+        cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_name: &str,
+        runner_id: RunnerId,
+        runner_settings: Vec<u8>,
+        worker_params: Option<serde_json::Value>,
+    ) -> impl std::future::Future<Output = Result<Worker>> + Send {
+        let worker_name = worker_name.to_owned();
+        async move {
+            let mut worker = if let Some(serde_json::Value::Object(obj)) = worker_params {
+                build_worker_data_from_json(&worker_name, runner_id, runner_settings, &obj)
+            } else {
+                build_worker_data_default(&worker_name, runner_id, runner_settings)
+            };
+
+            if !worker.use_static {
+                make_worker_name_unique(&mut worker);
+            }
+
+            self.find_or_create_worker(cx, metadata, &worker).await
+        }
+    }
+    /// Create WorkerData by looking up runner by name
     fn create_worker_from_runner(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -727,21 +773,19 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     ) -> impl std::future::Future<Output = Result<Worker>> + Send {
         let runner_name = runner_name.to_owned();
         async move {
-            let (runner_id, _runner_data) = self
+            let (runner_id, _) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
                 .await?;
 
-            let mut worker = if let Some(serde_json::Value::Object(obj)) = worker_params {
-                build_worker_data_from_json(&runner_name, runner_id, runner_settings, &obj)
-            } else {
-                build_worker_data_default(&runner_name, runner_id, runner_settings)
-            };
-
-            if !worker.use_static {
-                make_worker_name_unique(&mut worker);
-            }
-
-            self.find_or_create_worker(cx, metadata, &worker).await
+            self.create_worker_with_runner_id(
+                cx,
+                metadata,
+                &runner_name,
+                runner_id,
+                runner_settings,
+                worker_params,
+            )
+            .await
         }
     }
     /// Enqueue job with ephemeral worker and delete worker after completion
@@ -766,22 +810,47 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
 
             let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
             let output = self
-                .enqueue_job_and_get_output(cx, metadata.clone(), w, job_args, job_timeout_sec, using.as_deref())
+                .enqueue_job_and_get_output(
+                    cx,
+                    metadata.clone(),
+                    w,
+                    job_args,
+                    job_timeout_sec,
+                    using.as_deref(),
+                )
                 .await
                 .inspect_err(|e| {
                     tracing::warn!("Execute task failed: enqueue job and get output: {:#?}", e)
                 });
 
+            // Delete ephemeral worker regardless of job result
             if !wdata.use_static {
-                let deleted = self
-                    .jobworkerp_client()
-                    .worker_client()
-                    .await
-                    .delete(to_request(&metadata, wid)?)
-                    .await?
-                    .into_inner();
-                if !deleted.is_success {
-                    tracing::warn!("Failed to delete worker: {:#?}", wid);
+                match to_request(&metadata, wid) {
+                    Ok(req) => {
+                        match self
+                            .jobworkerp_client()
+                            .worker_client()
+                            .await
+                            .delete(req)
+                            .await
+                        {
+                            Ok(res) => {
+                                if !res.into_inner().is_success {
+                                    tracing::warn!("Failed to delete worker: {:#?}", wid);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to delete worker {:#?}: {:#?}", wid, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create delete request for worker {:#?}: {:#?}",
+                            wid,
+                            e
+                        );
+                    }
                 }
             }
             output
@@ -803,10 +872,23 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         let using = using.map(|s| s.to_owned());
         async move {
             let worker = self
-                .create_worker_from_runner(cx, metadata.clone(), &name, runner_settings, worker_params)
+                .create_worker_from_runner(
+                    cx,
+                    metadata.clone(),
+                    &name,
+                    runner_settings,
+                    worker_params,
+                )
                 .await?;
-            self.enqueue_with_ephemeral_worker(cx, metadata, worker, job_args, job_timeout_sec, using.as_deref())
-                .await
+            self.enqueue_with_ephemeral_worker(
+                cx,
+                metadata,
+                worker,
+                job_args,
+                job_timeout_sec,
+                using.as_deref(),
+            )
+            .await
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -824,19 +906,28 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         let runner_name = runner_name.to_owned();
         let using = using.map(|s| s.to_owned());
         async move {
-            let (_rid, rdata) = self
+            let (rid, rdata) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
                 .await?;
 
             let result_descriptor =
                 JobworkerpProto::parse_result_schema_descriptor(&rdata, using.as_deref())?;
-            let output = self
-                .setup_worker_and_enqueue_with_raw_output(
+
+            let worker = self
+                .create_worker_with_runner_id(
                     cx,
-                    metadata,
+                    metadata.clone(),
                     &runner_name,
+                    rid,
                     runner_settings,
                     worker_params,
+                )
+                .await?;
+            let output = self
+                .enqueue_with_ephemeral_worker(
+                    cx,
+                    metadata,
+                    worker,
                     job_args,
                     job_timeout_sec,
                     using.as_deref(),
@@ -860,7 +951,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         let runner_name = runner_name.to_owned();
         let using = using.map(|s| s.to_owned());
         async move {
-            let (_rid, rdata) = self
+            let (rid, rdata) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
                 .await
                 .map_err(|_| {
@@ -876,6 +967,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .map_err(|e| {
                         anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
                     })?;
+            let result_descriptor =
+                JobworkerpProto::parse_result_schema_descriptor(&rdata, using.as_deref())?;
 
             let runner_settings_bytes = if let Some(ope_desc) = runner_settings_descriptor {
                 tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
@@ -897,17 +990,28 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {e:#?}"))?
                     .into_bytes(),
             };
-            self.setup_worker_and_enqueue(
-                cx,
-                metadata,
-                &runner_name,
-                runner_settings_bytes,
-                worker_params,
-                job_args_bytes,
-                job_timeout_sec,
-                using.as_deref(),
-            )
-            .await
+
+            let worker = self
+                .create_worker_with_runner_id(
+                    cx,
+                    metadata.clone(),
+                    &runner_name,
+                    rid,
+                    runner_settings_bytes,
+                    worker_params,
+                )
+                .await?;
+            let output = self
+                .enqueue_with_ephemeral_worker(
+                    cx,
+                    metadata,
+                    worker,
+                    job_args_bytes,
+                    job_timeout_sec,
+                    using.as_deref(),
+                )
+                .await?;
+            decode_output_to_json(&output, result_descriptor.as_ref())
         }
     }
     fn enqueue_with_json<'a>(
@@ -960,9 +1064,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 data: Some(rdata),
             }) = runner_opt
             {
-                let args_descriptor =
-                    JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)
-                        .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(
+                    &rdata, using,
+                )
+                .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
 
                 tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor {
