@@ -11,7 +11,7 @@ use crate::jobworkerp::service::{
     CreateJobResponse, JobRequest, RunnerNameRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
@@ -208,7 +208,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_function_list_by_set<'a>(
@@ -247,7 +246,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_runner_by_name<'a>(
@@ -281,7 +279,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_worker_by_name<'a>(
@@ -504,21 +501,22 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            self.enqueue_worker_job(
-                cx,
-                metadata,
-                worker_data,
-                args,
-                timeout_sec,
-                run_after_time,
-                priority,
-                using,
-            )
-            .await?
-            .result
-            .ok_or_else(|| ClientError::NotFound("result not found".to_string()))?
-            .data
-            .ok_or_else(|| ClientError::NotFound("result data not found".to_string()).into())
+            Ok(self
+                .enqueue_worker_job(
+                    cx,
+                    metadata,
+                    worker_data,
+                    args,
+                    timeout_sec,
+                    run_after_time,
+                    priority,
+                    using,
+                )
+                .await?
+                .result
+                .ok_or_else(|| ClientError::NotFound("result not found".to_string()))?
+                .data
+                .ok_or_else(|| ClientError::NotFound("result data not found".to_string()))?)
         }
     }
     #[allow(clippy::too_many_arguments)]
