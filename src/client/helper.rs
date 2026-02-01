@@ -359,7 +359,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             {
                 Ok((rid, rdata))
             } else {
-                Err(ClientError::NotFound(format!("Not found runner: {runner_name}")).into())
+                Err(ClientError::NotFound(format!("runner not found: {runner_name}")).into())
             }
         }
     }
@@ -966,7 +966,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
                 .await
                 .map_err(|_| {
-                    crate::error::ClientError::NotFound(format!("Not found runner: {runner_name}"))
+                    crate::error::ClientError::NotFound(format!("runner not found: {runner_name}"))
                 })?;
 
             let runner_settings_descriptor =
@@ -1127,7 +1127,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 decode_output_to_json(&output_bytes, result_descriptor.as_ref())
             } else {
                 Err(ClientError::NotFound(format!(
-                    "Not found runner with id: {:?} for worker: {}",
+                    "runner not found with id: {:?} for worker: {}",
                     runner_id, &worker_data.name
                 ))
                 .into())
@@ -1196,7 +1196,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .await
                 .context("delete_worker_by_id")
             } else {
-                Err(ClientError::NotFound(format!("Not found worker to delete: {name}")).into())
+                Err(ClientError::NotFound(format!("worker not found: {name}")).into())
             }
         }
     }
