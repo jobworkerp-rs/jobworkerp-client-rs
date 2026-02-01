@@ -1,5 +1,6 @@
 use super::UseJobworkerpClient;
 use crate::command::to_request;
+use crate::error::ClientError;
 use crate::jobworkerp::data::{
     JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
     RunnerData, RunnerId, Worker, WorkerData, WorkerId,
@@ -10,7 +11,7 @@ use crate::jobworkerp::service::{
     CreateJobResponse, JobRequest, RunnerNameRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
@@ -140,8 +141,12 @@ fn decode_output_to_json(
             Ok(m) => {
                 let j = ProtobufDescriptor::message_to_json(&m)?;
                 tracing::debug!("Result schema exists. decode message with proto: {:#?}", j);
-                serde_json::from_str(j.as_str())
-                    .map_err(|e| anyhow!("Failed to parse JSON from protobuf message: {e:#?}"))
+                serde_json::from_str(j.as_str()).map_err(|e| {
+                    ClientError::ParseError(format!(
+                        "Failed to parse JSON from protobuf message: {e:#?}"
+                    ))
+                    .into()
+                })
             }
             Err(e) => {
                 tracing::warn!(
@@ -149,7 +154,10 @@ fn decode_output_to_json(
                     e
                 );
                 serde_json::from_slice(output).map_err(|e_slice| {
-                    anyhow!("Failed to parse output as JSON (slice): {e_slice:#?}")
+                    ClientError::ParseError(format!(
+                        "Failed to parse output as JSON (slice): {e_slice:#?}"
+                    ))
+                    .into()
                 })
             }
         }
@@ -185,7 +193,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .find_list(to_request(&metadata, request)?)
                         .await
-                        .map_err(|e| anyhow!(e))?;
+                        .map_err(ClientError::from_tonic_status)?;
                     let mut functions = Vec::new();
                     let mut stream = response.into_inner();
                     while let Some(t) = stream.next().await {
@@ -193,14 +201,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             Ok(t) => {
                                 functions.push(t);
                             }
-                            Err(e) => return Err(anyhow!(e)),
+                            Err(e) => return Err(ClientError::from_tonic_status(e).into()),
                         }
                     }
                     Ok(functions)
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_function_list_by_set<'a>(
@@ -224,7 +231,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .find_list_by_set(to_request(&metadata, request)?)
                         .await
-                        .map_err(|e| anyhow!(e))?;
+                        .map_err(ClientError::from_tonic_status)?;
                     let mut functions = Vec::new();
                     let mut stream = response.into_inner();
                     while let Some(t) = stream.next().await {
@@ -232,14 +239,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                             Ok(t) => {
                                 functions.push(t);
                             }
-                            Err(e) => return Err(anyhow!(e)),
+                            Err(e) => return Err(ClientError::from_tonic_status(e).into()),
                         }
                     }
                     Ok(functions)
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_runner_by_name<'a>(
@@ -267,24 +273,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let res = runner_client
                         .find_by_name(to_request(&metadata, request)?)
                         .await
-                        .map_err(|e| anyhow!(e))?
+                        .map_err(ClientError::from_tonic_status)?
                         .into_inner();
                     Ok(res.data)
-                    // while let Some(item) = stream.next().await {
-                    //     match item {
-                    //         Ok(item) => {
-                    //             if item.data.as_ref().is_some_and(|d| d.name == name_owned) {
-                    //                 return Ok(Some(item));
-                    //             }
-                    //         }
-                    //         Err(e) => return Err(anyhow!(e)),
-                    //     }
-                    // }
-                    // Ok(None)
                 },
             )
             .await
-            .map_err(|e| anyhow!(e.to_string()))
         }
     }
     fn find_worker_by_name<'a>(
@@ -310,7 +304,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     let worker_response = worker_cli
                         .find_by_name(to_request(&metadata, request)?)
                         .await
-                        .map_err(|e| anyhow!(e))?;
+                        .map_err(ClientError::from_tonic_status)?;
 
                     let worker = worker_response.into_inner().data;
                     Ok(worker.and_then(|w| {
@@ -365,7 +359,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             {
                 Ok((rid, rdata))
             } else {
-                Err(anyhow!("Not found runner: {runner_name}"))
+                Err(ClientError::NotFound(format!("runner not found: {runner_name}")).into())
             }
         }
     }
@@ -400,7 +394,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                 .find_by_name(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|response| response.into_inner().data)
-                                .map_err(|e| anyhow!(e))
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
                         }
                     },
                 )
@@ -432,14 +426,17 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                     .create(to_request(&metadata_clone, req)?)
                                     .await
                                     .map(|response| response.into_inner().id)
-                                    .map_err(|e| anyhow!(e))
+                                    .map_err(|e| ClientError::from_tonic_status(e).into())
                             }
                         },
                     )
                     .await;
 
-                let created_worker_id = created_worker_id_opt_res?
-                    .ok_or_else(|| anyhow!("create worker response is empty or id is None"))?;
+                let created_worker_id = created_worker_id_opt_res?.ok_or_else(|| {
+                    ClientError::RuntimeError(
+                        "create worker response is empty or id is None".to_string(),
+                    )
+                })?;
 
                 Ok(Worker {
                     id: Some(created_worker_id),
@@ -482,11 +479,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             if res.status() == ResultStatus::Success {
                 Ok(res)
             } else {
-                Err(anyhow!(
+                Err(ClientError::RuntimeError(format!(
                     "job failed: {:?}",
                     res.output
                         .map(|o| String::from_utf8_lossy(&o.items).into_owned())
                 ))
+                .into())
             }
         }
     }
@@ -503,21 +501,22 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
-            self.enqueue_worker_job(
-                cx,
-                metadata,
-                worker_data,
-                args,
-                timeout_sec,
-                run_after_time,
-                priority,
-                using,
-            )
-            .await?
-            .result
-            .ok_or(anyhow!("result not found"))?
-            .data
-            .ok_or(anyhow!("result data not found"))
+            Ok(self
+                .enqueue_worker_job(
+                    cx,
+                    metadata,
+                    worker_data,
+                    args,
+                    timeout_sec,
+                    run_after_time,
+                    priority,
+                    using,
+                )
+                .await?
+                .result
+                .ok_or_else(|| ClientError::NotFound("result not found".to_string()))?
+                .data
+                .ok_or_else(|| ClientError::NotFound("result data not found".to_string()))?)
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -549,16 +548,19 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let output = res
                     .output
                     .as_ref()
-                    .ok_or(anyhow!("job result output is empty: {res:?}"))?
+                    .ok_or_else(|| {
+                        ClientError::NotFound(format!("job result output is empty: {res:?}"))
+                    })?
                     .items
                     .to_owned();
                 Ok(output)
             } else {
-                Err(anyhow!(
+                Err(ClientError::RuntimeError(format!(
                     "job failed: {:?}",
                     res.output
                         .map(|o| String::from_utf8_lossy(&o.items).into_owned())
                 ))
+                .into())
             }
         }
     }
@@ -578,9 +580,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let worker = self
                 .find_or_create_worker(cx, metadata.clone(), worker_data)
                 .await?;
-            let worker_id = worker
-                .id
-                .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?;
+            let worker_id = worker.id.ok_or_else(|| {
+                ClientError::InvalidParameter(
+                    "Worker ID not found after find_or_create_worker".to_string(),
+                )
+            })?;
             let job_request_payload = build_job_request(
                 worker_id,
                 args,
@@ -605,7 +609,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .enqueue(to_request(&metadata, req)?)
                         .await
                         .map(|r| r.into_inner())
-                        .map_err(|e| anyhow!(e))
+                        .map_err(|e| ClientError::from_tonic_status(e).into())
                 },
             )
             .await
@@ -634,9 +638,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let worker = self
                 .find_or_create_worker(cx, metadata.clone(), worker_data)
                 .await?;
-            let worker_id = worker
-                .id
-                .ok_or(anyhow!("Worker ID not found after find_or_create_worker"))?;
+            let worker_id = worker.id.ok_or_else(|| {
+                ClientError::InvalidParameter(
+                    "Worker ID not found after find_or_create_worker".to_string(),
+                )
+            })?;
             let job_request_payload = build_job_request(
                 worker_id,
                 args,
@@ -661,7 +667,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .enqueue_for_stream(to_request(&metadata_clone, req)?)
                         .await
-                        .map_err(|e| anyhow!(e))?;
+                        .map_err(ClientError::from_tonic_status)?;
                     let metadata_map = response.metadata().clone();
                     let streaming = response.into_inner();
                     Ok((metadata_map, streaming))
@@ -705,14 +711,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .enqueue(to_request(&metadata, req)?)
                         .await
-                        .map_err(|e| anyhow!(e))?;
+                        .map_err(ClientError::from_tonic_status)?;
                     let job_response = response.into_inner();
-                    let job_result = job_response
-                        .result
-                        .ok_or_else(|| anyhow!("result not found in CreateJobResponse"))?;
-                    let job_result_data = job_result
-                        .data
-                        .ok_or_else(|| anyhow!("result data not found in JobResult"))?;
+                    let job_result = job_response.result.ok_or_else(|| {
+                        ClientError::NotFound("result not found in CreateJobResponse".to_string())
+                    })?;
+                    let job_result_data = job_result.data.ok_or_else(|| {
+                        ClientError::NotFound("result data not found in JobResult".to_string())
+                    })?;
                     Ok(job_result_data)
                 },
             )
@@ -723,7 +729,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             if res.status() == ResultStatus::Success && res.output.is_some() {
                 let output_item = res
                     .output
-                    .ok_or(anyhow!("job result output is empty"))?
+                    .ok_or_else(|| ClientError::NotFound("job result output is empty".to_string()))?
                     .items
                     .to_owned();
                 Ok(output_item)
@@ -733,7 +739,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .as_ref()
                     .map(|e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned())
                     .unwrap_or_else(|| format!("job failed with status: {:?}", res.status()));
-                Err(anyhow!("job failed: {error_message}"))
+                Err(ClientError::RuntimeError(format!("job failed: {error_message}")).into())
             }
         }
     }
@@ -805,7 +811,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     id: Some(wid),
                     data: Some(wdata),
                 } => (wid, wdata),
-                _ => return Err(anyhow!("Invalid worker: missing id or data")),
+                _ => {
+                    return Err(ClientError::InvalidParameter(
+                        "Invalid worker: missing id or data".to_string(),
+                    )
+                    .into());
+                }
             };
 
             let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
@@ -955,17 +966,21 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
                 .await
                 .map_err(|_| {
-                    crate::error::ClientError::NotFound(format!("Not found runner: {runner_name}"))
+                    crate::error::ClientError::NotFound(format!("runner not found: {runner_name}"))
                 })?;
 
             let runner_settings_descriptor =
                 JobworkerpProto::parse_runner_settings_schema_descriptor(&rdata).map_err(|e| {
-                    anyhow::anyhow!("Failed to parse runner_settings schema descriptor: {e:#?}")
+                    ClientError::ParseError(format!(
+                        "Failed to parse runner_settings schema descriptor: {e:#?}"
+                    ))
                 })?;
             let args_descriptor =
                 JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using.as_deref())
                     .map_err(|e| {
-                        anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
+                        ClientError::ParseError(format!(
+                            "Failed to parse job_args schema descriptor: {e:#?}"
+                        ))
                     })?;
             let result_descriptor =
                 JobworkerpProto::parse_result_schema_descriptor(&rdata, using.as_deref())?;
@@ -976,7 +991,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true))
                     .unwrap_or(Ok(vec![]))
                     .map_err(|e| {
-                        anyhow::anyhow!("Failed to parse runner_settings schema: {e:#?}")
+                        ClientError::ParseError(format!(
+                            "Failed to parse runner_settings schema: {e:#?}"
+                        ))
                     })?
             } else {
                 tracing::debug!("runner settings schema empty");
@@ -985,9 +1002,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             tracing::trace!("job args: {:#?}", &job_args);
             let job_args_bytes = match args_descriptor {
                 Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse job_args schema: {e:#?}"))?,
+                    .map_err(|e| {
+                        ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}"))
+                    })?,
                 _ => serde_json::to_string(&job_args)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize job_args: {e:#?}"))?
+                    .map_err(|e| {
+                        ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
+                    })?
                     .into_bytes(),
             };
 
@@ -1025,10 +1046,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
         async move {
             let runner_id = worker_data.runner_id.ok_or_else(|| {
-                anyhow!(
+                ClientError::InvalidParameter(format!(
                     "runner_id not found in worker_data for {}",
                     worker_data.name
-                )
+                ))
             })?;
 
             let client_clone = self.jobworkerp_client().clone();
@@ -1051,7 +1072,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                 .find(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|response| response.into_inner().data)
-                                .map_err(|e| anyhow!(e))
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
                         }
                     },
                 )
@@ -1067,14 +1088,24 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(
                     &rdata, using,
                 )
-                .map_err(|e| anyhow!("Failed to parse job_args schema descriptor: {e:#?}"))?;
+                .map_err(|e| {
+                    ClientError::ParseError(format!(
+                        "Failed to parse job_args schema descriptor: {e:#?}"
+                    ))
+                })?;
 
                 tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor {
                     Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
-                        .map_err(|e| anyhow!("Failed to parse job_args schema: {e:#?}"))?,
+                        .map_err(|e| {
+                            ClientError::ParseError(format!(
+                                "Failed to parse job_args schema: {e:#?}"
+                            ))
+                        })?,
                     _ => serde_json::to_string(&job_args)
-                        .map_err(|e| anyhow!("Failed to serialize job_args: {e:#?}"))?
+                        .map_err(|e| {
+                            ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
+                        })?
                         .into_bytes(),
                 };
 
@@ -1095,11 +1126,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     JobworkerpProto::parse_result_schema_descriptor(&rdata, using)?;
                 decode_output_to_json(&output_bytes, result_descriptor.as_ref())
             } else {
-                Err(anyhow!(
-                    "Not found runner with id: {:?} for worker: {}",
-                    runner_id,
-                    &worker_data.name
+                Err(ClientError::NotFound(format!(
+                    "runner not found with id: {:?} for worker: {}",
+                    runner_id, &worker_data.name
                 ))
+                .into())
             }
         }
     }
@@ -1134,7 +1165,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                 .find_by_name(to_request(&metadata_clone, req)?)
                                 .await
                                 .map(|r| r.into_inner().data)
-                                .map_err(|e| anyhow!(e))
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
                         }
                     },
                 )
@@ -1158,14 +1189,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                                 .delete(to_request(&metadata, req)?)
                                 .await
                                 .map(|r| r.into_inner().is_success)
-                                .map_err(|e| anyhow!(e))
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
                         }
                     },
                 )
                 .await
                 .context("delete_worker_by_id")
             } else {
-                Err(anyhow!("Not found worker to delete: {name}"))
+                Err(ClientError::NotFound(format!("worker not found: {name}")).into())
             }
         }
     }

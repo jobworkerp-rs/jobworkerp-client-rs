@@ -1,6 +1,7 @@
 use super::helper::UseJobworkerpClientHelper;
 use crate::{
     client::{JobworkerpClient, UseJobworkerpClient},
+    error::ClientError,
     jobworkerp::data::{Runner, RunnerType},
     proto::JobworkerpProto,
 };
@@ -122,11 +123,11 @@ impl JobworkerpClientWrapper {
                 tracing::debug!("No result schema: {}", text);
                 Ok(serde_json::Value::String(text.to_string()))
             }
-            .map_err(|e| anyhow::anyhow!("Failed to parse output: {e:#?}"));
+            .map_err(|e| ClientError::ParseError(format!("Failed to parse output: {e:#?}")).into());
             output
         } else {
             tracing::error!("runner not found: WORKFLOW");
-            Err(anyhow::anyhow!("runner not found: WORKFLOW"))
+            Err(ClientError::NotFound("runner not found: WORKFLOW".to_string()).into())
         }
     }
 }
