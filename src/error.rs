@@ -26,13 +26,16 @@ impl ClientError {
         let message = status.message().to_string();
         match status.code() {
             tonic::Code::NotFound => ClientError::NotFound(message),
-            tonic::Code::InvalidArgument => ClientError::InvalidParameter(message),
-            tonic::Code::AlreadyExists => ClientError::Conflict(message),
+            tonic::Code::InvalidArgument | tonic::Code::OutOfRange => {
+                ClientError::InvalidParameter(message)
+            }
+            tonic::Code::AlreadyExists | tonic::Code::Aborted => ClientError::Conflict(message),
             tonic::Code::DeadlineExceeded => ClientError::TimeoutError(message),
             tonic::Code::Unauthenticated
             | tonic::Code::PermissionDenied
-            | tonic::Code::Unavailable => ClientError::ExternalServiceError(message),
-            tonic::Code::FailedPrecondition | tonic::Code::Internal => {
+            | tonic::Code::Unavailable
+            | tonic::Code::ResourceExhausted => ClientError::ExternalServiceError(message),
+            tonic::Code::FailedPrecondition | tonic::Code::Internal | tonic::Code::Cancelled => {
                 ClientError::RuntimeError(message)
             }
             _ => ClientError::UnknownError(message),
