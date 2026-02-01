@@ -964,10 +964,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         async move {
             let (rid, rdata) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
-                .await
-                .map_err(|_| {
-                    crate::error::ClientError::NotFound(format!("runner not found: {runner_name}"))
-                })?;
+                .await?;
 
             let runner_settings_descriptor =
                 JobworkerpProto::parse_runner_settings_schema_descriptor(&rdata).map_err(|e| {
