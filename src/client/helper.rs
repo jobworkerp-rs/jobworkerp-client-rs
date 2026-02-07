@@ -2,8 +2,8 @@ use super::UseJobworkerpClient;
 use crate::command::to_request;
 use crate::error::ClientError;
 use crate::jobworkerp::data::{
-    JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType, Runner,
-    RunnerData, RunnerId, Worker, WorkerData, WorkerId,
+    JobId, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType,
+    Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
 };
 use crate::jobworkerp::function::data::FunctionSpecs;
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
@@ -1195,6 +1195,36 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             } else {
                 Err(ClientError::NotFound(format!("worker not found: {name}")).into())
             }
+        }
+    }
+    /// Delete job by ID
+    fn delete_job<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        job_id: JobId,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
+        async move {
+            let delete_request = tonic::Request::new(job_id);
+            let client_clone = self.jobworkerp_client().clone();
+            Self::trace_grpc_client_with_request(
+                cx.cloned(),
+                "jobworkerp-client",
+                "delete_job.delete",
+                "delete",
+                delete_request,
+                move |req| async move {
+                    client_clone
+                        .job_client()
+                        .await
+                        .delete(to_request(&metadata, req)?)
+                        .await
+                        .map(|r| r.into_inner().is_success)
+                        .map_err(|e| ClientError::from_tonic_status(e).into())
+                },
+            )
+            .await
+            .context("delete_job")
         }
     }
 }
