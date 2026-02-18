@@ -985,7 +985,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let runner_settings_bytes = if let Some(ope_desc) = runner_settings_descriptor {
                 tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
                 runner_settings
-                    .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true))
+                    .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true, true))
                     .unwrap_or(Ok(vec![]))
                     .map_err(|e| {
                         ClientError::ParseError(format!(
@@ -998,10 +998,10 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             };
             tracing::trace!("job args: {:#?}", &job_args);
             let job_args_bytes = match args_descriptor {
-                Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
+                Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
                     .map_err(|e| {
-                        ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}"))
-                    })?,
+                    ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}"))
+                })?,
                 _ => serde_json::to_string(&job_args)
                     .map_err(|e| {
                         ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
@@ -1093,12 +1093,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
 
                 tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor {
-                    Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true)
-                        .map_err(|e| {
-                            ClientError::ParseError(format!(
-                                "Failed to parse job_args schema: {e:#?}"
-                            ))
-                        })?,
+                    Some(desc) => {
+                        JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
+                            .map_err(|e| {
+                                ClientError::ParseError(format!(
+                                    "Failed to parse job_args schema: {e:#?}"
+                                ))
+                            })?
+                    }
                     _ => serde_json::to_string(&job_args)
                         .map_err(|e| {
                             ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
