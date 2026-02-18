@@ -190,7 +190,7 @@ impl WorkerCommand {
                     .await
                     {
                         Ok(Some(ope_desc)) => {
-                            JobworkerpProto::json_to_message(ope_desc, settings.as_str())
+                            JobworkerpProto::json_to_message(ope_desc, settings.as_str(), true)
                                 .map_err(|e| {
                                     println!(
                                         "failed to parse runner_settings json to message: {e:?}"

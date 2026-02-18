@@ -82,7 +82,7 @@ impl JobworkerpClientWrapper {
         {
             let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)?;
             let job_args = if let Some(desc) = args_descriptor.clone() {
-                JobworkerpProto::json_value_to_message(desc, &job_args, true)
+                JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
             } else {
                 Ok(job_args.to_string().as_bytes().to_vec())
             }

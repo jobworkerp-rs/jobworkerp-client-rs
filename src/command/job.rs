@@ -228,7 +228,7 @@ impl JobCommand {
                 let request = JobRequest {
                     worker: Some(worker.to_job_worker()),
                     args: if let Some(args_d) = args_desc {
-                        JobworkerpProto::json_to_message(args_d, args.as_str()).unwrap()
+                        JobworkerpProto::json_to_message(args_d, args.as_str(), true).unwrap()
                     } else {
                         args.as_bytes().to_vec()
                     },
@@ -286,7 +286,7 @@ impl JobCommand {
                 let request = JobRequest {
                     worker: Some(worker.to_job_worker()),
                     args: if let Some(args_d) = args_desc {
-                        JobworkerpProto::json_to_message(args_d, args.as_str()).unwrap()
+                        JobworkerpProto::json_to_message(args_d, args.as_str(), true).unwrap()
                     } else {
                         args.as_bytes().to_vec()
                     },
@@ -434,12 +434,17 @@ impl JobCommand {
                                 //     .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
                                 "workflow_context": context,
                             });
-                            JobworkerpProto::json_value_to_message(args_descriptor, &job_args, true)
-                                .map_err(|e| {
-                                    println!("Failed to parse job_args schema: {:#?}", &e);
-                                    anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
-                                })
-                                .unwrap()
+                            JobworkerpProto::json_value_to_message(
+                                args_descriptor,
+                                &job_args,
+                                true,
+                                true,
+                            )
+                            .map_err(|e| {
+                                println!("Failed to parse job_args schema: {:#?}", &e);
+                                anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
+                            })
+                            .unwrap()
                         }
                         _ => {
                             println!("args_descriptor not found");
