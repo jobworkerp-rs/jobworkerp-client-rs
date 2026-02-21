@@ -456,7 +456,7 @@ impl JobCommand {
                             anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
                         })
                         .unwrap();
-                    let (meta, mut response) = helper
+                    let enqueue_result = helper
                         .enqueue_stream_worker_job(
                             cx.as_ref(),
                             metadata.clone(),
@@ -467,14 +467,18 @@ impl JobCommand {
                             priority.clone().map(|p| p.to_grpc()),
                             None, // using is None for workflow runners
                         )
-                        .await
-                        .inspect_err(|e| {
-                            println!("enqueue_stream_worker_job error: {e:#?}");
-                        })
-                        .unwrap();
+                        .await;
+                    // Clean up temp worker regardless of enqueue result
                     let _ = helper
                         .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
                         .await;
+                    let (meta, mut response) = match enqueue_result {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Workflow execution failed: {e:#}");
+                            return;
+                        }
+                    };
                     // Check for job result header in initial response metadata
                     if let Some(id_bin) = meta.get_bin(JOB_ID_HEADER_NAME) {
                         match JobId::decode(id_bin.to_bytes().unwrap().as_ref()) {
