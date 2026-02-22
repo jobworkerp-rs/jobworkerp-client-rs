@@ -152,21 +152,16 @@ impl JobworkerpProto {
         descriptor: MessageDescriptor,
         json_value: &serde_json::Value,
         normalize_enum: bool,
-        ignore_unknown_fields: bool,
+        _ignore_unknown_fields: bool,
     ) -> Result<Vec<u8>> {
-        ProtobufDescriptor::json_value_to_message(
-            descriptor,
-            json_value,
-            normalize_enum,
-            ignore_unknown_fields,
-        )
+        ProtobufDescriptor::json_value_to_message(descriptor, json_value, normalize_enum)
     }
     pub fn json_to_message(
         descriptor: MessageDescriptor,
         json_str: &str,
-        normalize_enum: bool,
+        _normalize_enum: bool,
     ) -> Result<Vec<u8>> {
-        ProtobufDescriptor::json_to_message(descriptor, json_str, normalize_enum)
+        ProtobufDescriptor::json_to_message(descriptor, json_str)
     }
     pub fn parse_runner_settings_schema_descriptor(
         runner_data: &RunnerData,
