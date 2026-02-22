@@ -2,8 +2,8 @@ use super::UseJobworkerpClient;
 use crate::command::to_request;
 use crate::error::ClientError;
 use crate::jobworkerp::data::{
-    JobId, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType,
-    Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
+    JobId, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem, ResultStatus,
+    RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
 };
 use crate::jobworkerp::function::data::FunctionSpecs;
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
@@ -17,6 +17,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
 use command_utils::util::datetime;
 use command_utils::util::scoped_cache::ScopedCache;
+use prost::Message;
 use prost_reflect::MessageDescriptor;
 use rand;
 use std::collections::HashMap;
@@ -1199,6 +1200,164 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    /// Enqueue a job with JSON args and return (JobId, Streaming, result_descriptor)
+    /// for cancellable streaming processing.
+    ///
+    /// This combines the JSON-to-protobuf args conversion from `enqueue_with_json`
+    /// with the streaming enqueue from `enqueue_stream_worker_job`, returning
+    /// the JobId (from response metadata) so callers can cancel via `delete_job`.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_stream_with_json<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u32,
+        using: Option<&'a str>,
+    ) -> impl std::future::Future<
+        Output = Result<(
+            Option<JobId>,
+            tonic::Streaming<ResultOutputItem>,
+            Option<MessageDescriptor>,
+        )>,
+    > + Send
+    + 'a {
+        async move {
+            let runner_id = worker_data.runner_id.ok_or_else(|| {
+                ClientError::InvalidParameter(format!(
+                    "runner_id not found in worker_data for {}",
+                    worker_data.name
+                ))
+            })?;
+
+            let client_clone = self.jobworkerp_client().clone();
+            let find_runner_request = tonic::Request::new(runner_id);
+            let metadata_clone = metadata.clone();
+
+            let runner_response_opt_res: Result<Option<Runner>> =
+                Self::trace_grpc_client_with_request(
+                    cx.cloned(),
+                    "jobworkerp-client",
+                    "enqueue_stream_with_json.find_runner",
+                    "find",
+                    find_runner_request,
+                    {
+                        let client_clone_inner = client_clone.clone();
+                        move |req| async move {
+                            client_clone_inner
+                                .runner_client()
+                                .await
+                                .find(to_request(&metadata_clone, req)?)
+                                .await
+                                .map(|response| response.into_inner().data)
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
+                        }
+                    },
+                )
+                .await;
+
+            let runner_opt = runner_response_opt_res?;
+
+            if let Some(Runner {
+                id: Some(_sid),
+                data: Some(rdata),
+            }) = runner_opt
+            {
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(
+                    &rdata, using,
+                )
+                .map_err(|e| {
+                    ClientError::ParseError(format!(
+                        "Failed to parse job_args schema descriptor: {e:#?}"
+                    ))
+                })?;
+
+                tracing::trace!("job args (json): {:#?}", &job_args);
+                let job_args_bytes = match args_descriptor {
+                    Some(desc) => {
+                        JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
+                            .map_err(|e| {
+                                ClientError::ParseError(format!(
+                                    "Failed to parse job_args schema: {e:#?}"
+                                ))
+                            })?
+                    }
+                    _ => serde_json::to_string(&job_args)
+                        .map_err(|e| {
+                            ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
+                        })?
+                        .into_bytes(),
+                };
+
+                let (meta_map, streaming) = self
+                    .enqueue_stream_worker_job(
+                        cx,
+                        metadata,
+                        worker_data,
+                        job_args_bytes,
+                        job_timeout_sec,
+                        None,
+                        None,
+                        using,
+                    )
+                    .await?;
+
+                // Extract JobId from response metadata
+                let job_id = meta_map
+                    .get_bin(crate::command::job::JOB_ID_HEADER_NAME)
+                    .and_then(|id_bin| id_bin.to_bytes().ok())
+                    .and_then(|bytes| JobId::decode(bytes.as_ref()).ok());
+
+                if job_id.is_none() {
+                    tracing::warn!("JobId not found in streaming response metadata");
+                }
+
+                let result_descriptor =
+                    JobworkerpProto::parse_result_schema_descriptor(&rdata, using)?;
+
+                Ok((job_id, streaming, result_descriptor))
+            } else {
+                Err(ClientError::NotFound(format!(
+                    "runner not found with id: {:?} for worker: {}",
+                    runner_id, &worker_data.name
+                ))
+                .into())
+            }
+        }
+    }
+
+    /// Collect all output from a streaming job response and decode to JSON.
+    fn collect_stream_result<'a>(
+        stream: &'a mut tonic::Streaming<ResultOutputItem>,
+        result_descriptor: Option<&'a MessageDescriptor>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
+        async move {
+            let mut collected: Vec<u8> = Vec::new();
+
+            while let Some(item_result) = stream.next().await {
+                let item = item_result.map_err(|e| ClientError::from_tonic_status(e))?;
+                match item.item {
+                    Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
+                        collected.extend_from_slice(&data);
+                    }
+                    Some(crate::jobworkerp::data::result_output_item::Item::FinalCollected(
+                        data,
+                    )) => {
+                        // FinalCollected replaces any previously accumulated data
+                        collected = data;
+                    }
+                    Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
+                        break;
+                    }
+                    None => {}
+                }
+            }
+
+            decode_output_to_json(&collected, result_descriptor)
+        }
+    }
+
     /// Delete job by ID
     fn delete_job<'a>(
         &'a self,
