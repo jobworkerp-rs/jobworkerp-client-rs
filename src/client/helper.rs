@@ -155,7 +155,9 @@ fn merge_decoded_chunks(chunks: Vec<serde_json::Value>) -> serde_json::Value {
     merged
 }
 
-/// Deep merge two JSON values, concatenating string fields.
+/// Deep merge two JSON values, concatenating string and array fields.
+/// Designed for LLM streaming deltas where each chunk carries incremental data:
+/// strings are appended, arrays are extended, and objects are merged recursively.
 fn deep_merge_concat(base: &mut serde_json::Value, overlay: serde_json::Value) {
     match (base, overlay) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
@@ -172,8 +174,12 @@ fn deep_merge_concat(base: &mut serde_json::Value, overlay: serde_json::Value) {
                 base_s.push_str(&s);
             }
         }
+        (serde_json::Value::Array(base_arr), serde_json::Value::Array(overlay_arr)) => {
+            // LLM streaming deltas send array elements incrementally (e.g. tool_calls)
+            base_arr.extend(overlay_arr);
+        }
         (base, overlay) => {
-            // For non-string scalars (numbers, bools, arrays, null), last value wins
+            // For non-string, non-array scalars (numbers, bools, null), last value wins
             *base = overlay;
         }
     }
@@ -1462,6 +1468,9 @@ pub async fn collect_stream_result(
     if !decoded_chunks.is_empty() {
         Ok(merge_decoded_chunks(decoded_chunks))
     } else {
-        decode_output_to_json(&collected, result_descriptor)
+        // When descriptor-based decoding failed (has_descriptor=false), the collected bytes
+        // are concatenated raw chunks, not a valid single protobuf message.
+        let desc = if has_descriptor { result_descriptor } else { None };
+        decode_output_to_json(&collected, desc)
     }
 }
