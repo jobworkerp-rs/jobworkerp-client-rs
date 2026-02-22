@@ -1374,64 +1374,6 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         }
     }
 
-    /// Collect all output from a streaming job response and decode to JSON.
-    fn collect_stream_result<'a>(
-        stream: &'a mut tonic::Streaming<ResultOutputItem>,
-        result_descriptor: Option<&'a MessageDescriptor>,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
-        async move {
-            let mut collected: Vec<u8> = Vec::new();
-            // When result_descriptor is present, each Data chunk is an independent
-            // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
-            // causes later field values to overwrite earlier ones during protobuf
-            // decode. Instead, decode each chunk individually and merge the JSON
-            // text fields by string concatenation.
-            let mut decoded_chunks: Vec<serde_json::Value> = Vec::new();
-            let has_descriptor = result_descriptor.is_some();
-
-            while let Some(item_result) = stream.next().await {
-                let item = item_result.map_err(|e| ClientError::from_tonic_status(e))?;
-                match item.item {
-                    Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
-                        if has_descriptor {
-                            // Decode each chunk independently
-                            match decode_output_to_json(&data, result_descriptor) {
-                                Ok(chunk_json) => decoded_chunks.push(chunk_json),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "Failed to decode streaming chunk, falling back to raw accumulation"
-                                    );
-                                    // Fall back to raw byte accumulation
-                                    collected.extend_from_slice(&data);
-                                }
-                            }
-                        } else {
-                            collected.extend_from_slice(&data);
-                        }
-                    }
-                    Some(crate::jobworkerp::data::result_output_item::Item::FinalCollected(
-                        data,
-                    )) => {
-                        // FinalCollected (STREAMING_TYPE_INTERNAL only): complete aggregated result
-                        decoded_chunks.clear();
-                        collected = data;
-                    }
-                    Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
-                        break;
-                    }
-                    None => {}
-                }
-            }
-
-            if !decoded_chunks.is_empty() {
-                Ok(merge_decoded_chunks(decoded_chunks))
-            } else {
-                decode_output_to_json(&collected, result_descriptor)
-            }
-        }
-    }
-
     /// Delete job by ID
     fn delete_job<'a>(
         &'a self,
@@ -1461,5 +1403,65 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .await
             .context("delete_job")
         }
+    }
+}
+
+/// Collect all output from a streaming job response and decode to JSON.
+pub async fn collect_stream_result(
+    stream: &mut tonic::Streaming<ResultOutputItem>,
+    result_descriptor: Option<&MessageDescriptor>,
+) -> Result<serde_json::Value> {
+    let mut collected: Vec<u8> = Vec::new();
+    // When result_descriptor is present, each Data chunk is an independent
+    // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
+    // causes later field values to overwrite earlier ones during protobuf
+    // decode. Instead, decode each chunk individually and merge the JSON
+    // text fields by string concatenation.
+    let mut decoded_chunks: Vec<serde_json::Value> = Vec::new();
+    let mut has_descriptor = result_descriptor.is_some();
+    let mut finalized = false;
+
+    while let Some(item_result) = stream.next().await {
+        let item = item_result.map_err(ClientError::from_tonic_status)?;
+        match item.item {
+            Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
+                if finalized {
+                    tracing::warn!("Received Data chunk after FinalCollected, ignoring");
+                    continue;
+                }
+                // Always accumulate raw bytes for fallback
+                collected.extend_from_slice(&data);
+                if has_descriptor {
+                    // Decode each chunk independently
+                    match decode_output_to_json(&data, result_descriptor) {
+                        Ok(chunk_json) => decoded_chunks.push(chunk_json),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to decode streaming chunk, falling back to raw accumulation"
+                            );
+                            decoded_chunks.clear();
+                            has_descriptor = false;
+                        }
+                    }
+                }
+            }
+            Some(crate::jobworkerp::data::result_output_item::Item::FinalCollected(data)) => {
+                // FinalCollected (STREAMING_TYPE_INTERNAL only): complete aggregated result
+                decoded_chunks.clear();
+                collected = data;
+                finalized = true;
+            }
+            Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
+                break;
+            }
+            None => {}
+        }
+    }
+
+    if !decoded_chunks.is_empty() {
+        Ok(merge_decoded_chunks(decoded_chunks))
+    } else {
+        decode_output_to_json(&collected, result_descriptor)
     }
 }
