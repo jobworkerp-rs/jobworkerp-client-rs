@@ -132,6 +132,53 @@ fn build_job_request(
     }
 }
 
+/// Merge multiple decoded JSON chunks from streaming protobuf messages.
+///
+/// Each chunk is a decoded protobuf message (e.g. LLM streaming delta).
+/// String fields are concatenated; the last non-null value wins for other types.
+/// The first chunk provides the base structure.
+fn merge_decoded_chunks(chunks: Vec<serde_json::Value>) -> serde_json::Value {
+    if chunks.is_empty() {
+        return serde_json::Value::Null;
+    }
+    if chunks.len() == 1 {
+        return chunks.into_iter().next().unwrap();
+    }
+
+    let mut iter = chunks.into_iter();
+    let mut merged = iter.next().unwrap();
+
+    for chunk in iter {
+        deep_merge_concat(&mut merged, chunk);
+    }
+
+    merged
+}
+
+/// Deep merge two JSON values, concatenating string fields.
+fn deep_merge_concat(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                if let Some(base_val) = base_map.get_mut(&key) {
+                    deep_merge_concat(base_val, overlay_val);
+                } else {
+                    base_map.insert(key, overlay_val);
+                }
+            }
+        }
+        (base @ serde_json::Value::String(_), serde_json::Value::String(s)) => {
+            if let serde_json::Value::String(base_s) = base {
+                base_s.push_str(&s);
+            }
+        }
+        (base, overlay) => {
+            // For non-string scalars (numbers, bools, arrays, null), last value wins
+            *base = overlay;
+        }
+    }
+}
+
 /// Decode output bytes to JSON using result schema descriptor
 fn decode_output_to_json(
     output: &[u8],
@@ -1334,17 +1381,40 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
         async move {
             let mut collected: Vec<u8> = Vec::new();
+            // When result_descriptor is present, each Data chunk is an independent
+            // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
+            // causes later field values to overwrite earlier ones during protobuf
+            // decode. Instead, decode each chunk individually and merge the JSON
+            // text fields by string concatenation.
+            let mut decoded_chunks: Vec<serde_json::Value> = Vec::new();
+            let has_descriptor = result_descriptor.is_some();
 
             while let Some(item_result) = stream.next().await {
                 let item = item_result.map_err(|e| ClientError::from_tonic_status(e))?;
                 match item.item {
                     Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
-                        collected.extend_from_slice(&data);
+                        if has_descriptor {
+                            // Decode each chunk independently
+                            match decode_output_to_json(&data, result_descriptor) {
+                                Ok(chunk_json) => decoded_chunks.push(chunk_json),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "Failed to decode streaming chunk, falling back to raw accumulation"
+                                    );
+                                    // Fall back to raw byte accumulation
+                                    collected.extend_from_slice(&data);
+                                }
+                            }
+                        } else {
+                            collected.extend_from_slice(&data);
+                        }
                     }
                     Some(crate::jobworkerp::data::result_output_item::Item::FinalCollected(
                         data,
                     )) => {
-                        // FinalCollected replaces any previously accumulated data
+                        // FinalCollected (STREAMING_TYPE_INTERNAL only): complete aggregated result
+                        decoded_chunks.clear();
                         collected = data;
                     }
                     Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
@@ -1354,7 +1424,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 }
             }
 
-            decode_output_to_json(&collected, result_descriptor)
+            if !decoded_chunks.is_empty() {
+                Ok(merge_decoded_chunks(decoded_chunks))
+            } else {
+                decode_output_to_json(&collected, result_descriptor)
+            }
         }
     }
 
