@@ -1470,7 +1470,11 @@ pub async fn collect_stream_result(
     } else {
         // When descriptor-based decoding failed (has_descriptor=false), the collected bytes
         // are concatenated raw chunks, not a valid single protobuf message.
-        let desc = if has_descriptor { result_descriptor } else { None };
+        let desc = if has_descriptor {
+            result_descriptor
+        } else {
+            None
+        };
         decode_output_to_json(&collected, desc)
     }
 }
