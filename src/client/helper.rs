@@ -2,8 +2,8 @@ use super::UseJobworkerpClient;
 use crate::command::to_request;
 use crate::error::ClientError;
 use crate::jobworkerp::data::{
-    JobId, JobResultData, Priority, QueueType, ResponseType, ResultStatus, RetryPolicy, RetryType,
-    Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
+    JobId, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem, ResultStatus,
+    RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
 };
 use crate::jobworkerp::function::data::FunctionSpecs;
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
@@ -17,6 +17,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
 use command_utils::util::datetime;
 use command_utils::util::scoped_cache::ScopedCache;
+use prost::Message;
 use prost_reflect::MessageDescriptor;
 use rand;
 use std::collections::HashMap;
@@ -128,6 +129,59 @@ fn build_job_request(
         run_after_time,
         using: using.map(|s| s.to_string()),
         ..Default::default()
+    }
+}
+
+/// Merge multiple decoded JSON chunks from streaming protobuf messages.
+///
+/// Each chunk is a decoded protobuf message (e.g. LLM streaming delta).
+/// String fields are concatenated; the last non-null value wins for other types.
+/// The first chunk provides the base structure.
+fn merge_decoded_chunks(chunks: Vec<serde_json::Value>) -> serde_json::Value {
+    if chunks.is_empty() {
+        return serde_json::Value::Null;
+    }
+    if chunks.len() == 1 {
+        return chunks.into_iter().next().unwrap();
+    }
+
+    let mut iter = chunks.into_iter();
+    let mut merged = iter.next().unwrap();
+
+    for chunk in iter {
+        deep_merge_concat(&mut merged, chunk);
+    }
+
+    merged
+}
+
+/// Deep merge two JSON values, concatenating string and array fields.
+/// Designed for LLM streaming deltas where each chunk carries incremental data:
+/// strings are appended, arrays are extended, and objects are merged recursively.
+fn deep_merge_concat(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                if let Some(base_val) = base_map.get_mut(&key) {
+                    deep_merge_concat(base_val, overlay_val);
+                } else {
+                    base_map.insert(key, overlay_val);
+                }
+            }
+        }
+        (base @ serde_json::Value::String(_), serde_json::Value::String(s)) => {
+            if let serde_json::Value::String(base_s) = base {
+                base_s.push_str(&s);
+            }
+        }
+        (serde_json::Value::Array(base_arr), serde_json::Value::Array(overlay_arr)) => {
+            // LLM streaming deltas send array elements incrementally (e.g. tool_calls)
+            base_arr.extend(overlay_arr);
+        }
+        (base, overlay) => {
+            // For non-string, non-array scalars (numbers, bools, null), last value wins
+            *base = overlay;
+        }
     }
 }
 
@@ -1199,6 +1253,133 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    /// Enqueue a job with JSON args and return (JobId, Streaming, result_descriptor)
+    /// for cancellable streaming processing.
+    ///
+    /// This combines the JSON-to-protobuf args conversion from `enqueue_with_json`
+    /// with the streaming enqueue from `enqueue_stream_worker_job`, returning
+    /// the JobId (from response metadata) so callers can cancel via `delete_job`.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_stream_with_json<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u32,
+        using: Option<&'a str>,
+    ) -> impl std::future::Future<
+        Output = Result<(
+            Option<JobId>,
+            tonic::Streaming<ResultOutputItem>,
+            Option<MessageDescriptor>,
+        )>,
+    > + Send
+    + 'a {
+        async move {
+            let runner_id = worker_data.runner_id.ok_or_else(|| {
+                ClientError::InvalidParameter(format!(
+                    "runner_id not found in worker_data for {}",
+                    worker_data.name
+                ))
+            })?;
+
+            let client_clone = self.jobworkerp_client().clone();
+            let find_runner_request = tonic::Request::new(runner_id);
+            let metadata_clone = metadata.clone();
+
+            let runner_response_opt_res: Result<Option<Runner>> =
+                Self::trace_grpc_client_with_request(
+                    cx.cloned(),
+                    "jobworkerp-client",
+                    "enqueue_stream_with_json.find_runner",
+                    "find",
+                    find_runner_request,
+                    {
+                        let client_clone_inner = client_clone.clone();
+                        move |req| async move {
+                            client_clone_inner
+                                .runner_client()
+                                .await
+                                .find(to_request(&metadata_clone, req)?)
+                                .await
+                                .map(|response| response.into_inner().data)
+                                .map_err(|e| ClientError::from_tonic_status(e).into())
+                        }
+                    },
+                )
+                .await;
+
+            let runner_opt = runner_response_opt_res?;
+
+            if let Some(Runner {
+                id: Some(_sid),
+                data: Some(rdata),
+            }) = runner_opt
+            {
+                let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(
+                    &rdata, using,
+                )
+                .map_err(|e| {
+                    ClientError::ParseError(format!(
+                        "Failed to parse job_args schema descriptor: {e:#?}"
+                    ))
+                })?;
+
+                tracing::trace!("job args (json): {:#?}", &job_args);
+                let job_args_bytes = match args_descriptor {
+                    Some(desc) => {
+                        JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
+                            .map_err(|e| {
+                                ClientError::ParseError(format!(
+                                    "Failed to parse job_args schema: {e:#?}"
+                                ))
+                            })?
+                    }
+                    _ => serde_json::to_string(&job_args)
+                        .map_err(|e| {
+                            ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
+                        })?
+                        .into_bytes(),
+                };
+
+                let (meta_map, streaming) = self
+                    .enqueue_stream_worker_job(
+                        cx,
+                        metadata,
+                        worker_data,
+                        job_args_bytes,
+                        job_timeout_sec,
+                        None,
+                        None,
+                        using,
+                    )
+                    .await?;
+
+                // Extract JobId from response metadata
+                let job_id = meta_map
+                    .get_bin(crate::command::job::JOB_ID_HEADER_NAME)
+                    .and_then(|id_bin| id_bin.to_bytes().ok())
+                    .and_then(|bytes| JobId::decode(bytes.as_ref()).ok());
+
+                if job_id.is_none() {
+                    tracing::warn!("JobId not found in streaming response metadata");
+                }
+
+                let result_descriptor =
+                    JobworkerpProto::parse_result_schema_descriptor(&rdata, using)?;
+
+                Ok((job_id, streaming, result_descriptor))
+            } else {
+                Err(ClientError::NotFound(format!(
+                    "runner not found with id: {:?} for worker: {}",
+                    runner_id, &worker_data.name
+                ))
+                .into())
+            }
+        }
+    }
+
     /// Delete job by ID
     fn delete_job<'a>(
         &'a self,
@@ -1228,5 +1409,72 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .await
             .context("delete_job")
         }
+    }
+}
+
+/// Collect all output from a streaming job response and decode to JSON.
+pub async fn collect_stream_result(
+    stream: &mut tonic::Streaming<ResultOutputItem>,
+    result_descriptor: Option<&MessageDescriptor>,
+) -> Result<serde_json::Value> {
+    let mut collected: Vec<u8> = Vec::new();
+    // When result_descriptor is present, each Data chunk is an independent
+    // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
+    // causes later field values to overwrite earlier ones during protobuf
+    // decode. Instead, decode each chunk individually and merge the JSON
+    // text fields by string concatenation.
+    let mut decoded_chunks: Vec<serde_json::Value> = Vec::new();
+    let mut has_descriptor = result_descriptor.is_some();
+    let mut finalized = false;
+
+    while let Some(item_result) = stream.next().await {
+        let item = item_result.map_err(ClientError::from_tonic_status)?;
+        match item.item {
+            Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
+                if finalized {
+                    tracing::warn!("Received Data chunk after FinalCollected, ignoring");
+                    continue;
+                }
+                // Always accumulate raw bytes for fallback
+                collected.extend_from_slice(&data);
+                if has_descriptor {
+                    // Decode each chunk independently
+                    match decode_output_to_json(&data, result_descriptor) {
+                        Ok(chunk_json) => decoded_chunks.push(chunk_json),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to decode streaming chunk, falling back to raw accumulation"
+                            );
+                            decoded_chunks.clear();
+                            has_descriptor = false;
+                        }
+                    }
+                }
+            }
+            Some(crate::jobworkerp::data::result_output_item::Item::FinalCollected(data)) => {
+                // FinalCollected (STREAMING_TYPE_INTERNAL only): complete aggregated result
+                decoded_chunks.clear();
+                collected = data;
+                finalized = true;
+            }
+            Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
+                break;
+            }
+            None => {}
+        }
+    }
+
+    if !decoded_chunks.is_empty() {
+        Ok(merge_decoded_chunks(decoded_chunks))
+    } else {
+        // When descriptor-based decoding failed (has_descriptor=false), the collected bytes
+        // are concatenated raw chunks, not a valid single protobuf message.
+        let desc = if has_descriptor {
+            result_descriptor
+        } else {
+            None
+        };
+        decode_output_to_json(&collected, desc)
     }
 }
