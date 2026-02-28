@@ -104,6 +104,8 @@ pub trait MultiMethodPluginRunner: Send + Sync {
         // default implementation (return empty)
         Err(anyhow::anyhow!("not implemented"))
     }
+    /// Cancel the running task.
+    /// Unlike PluginRunner (legacy), this takes &mut self for simpler plugin implementation.
     fn cancel(&mut self) -> bool;
     fn is_canceled(&self) -> bool;
     fn runner_settings_proto(&self) -> String;
@@ -118,7 +120,27 @@ pub trait MultiMethodPluginRunner: Send + Sync {
     ) -> Option<HashMap<String, crate::jobworkerp::data::MethodJsonSchema>> {
         None
     }
+
     fn settings_schema(&self) -> String;
+
+    /// Whether this plugin supports feed data for the given method
+    fn supports_feed(&self, _using: Option<&str>) -> bool {
+        false
+    }
+
+    /// Proto definition for feed data of the given method
+    fn feed_data_proto(&self, _using: Option<&str>) -> Option<String> {
+        None
+    }
+
+    /// Set up a feed channel for receiving raw bytes during streaming execution.
+    /// The wrapper layer bridges this to FeedData by spawning an adapter task.
+    fn setup_feed_channel(
+        &mut self,
+        _using: Option<&str>,
+    ) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {
+        None
+    }
 
     /// Collect streaming output into a single result
     ///
@@ -128,6 +150,7 @@ pub trait MultiMethodPluginRunner: Send + Sync {
     fn collect_stream(
         &self,
         stream: futures::stream::BoxStream<'static, crate::jobworkerp::data::ResultOutputItem>,
+        _using: Option<&str>,
     ) -> CollectStreamFuture {
         use crate::jobworkerp::data::result_output_item;
         use futures::StreamExt;
