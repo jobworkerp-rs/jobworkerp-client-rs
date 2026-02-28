@@ -29,8 +29,8 @@ use crate::{
             WorkerData,
         },
         service::{
-            CountCondition, FindListRequest, FindListWithProcessingStatusRequest, JobRequest,
-            job_request,
+            CountCondition, FeedToStreamRequest, FindListRequest,
+            FindListWithProcessingStatusRequest, JobRequest, job_request,
         },
     },
     proto::JobworkerpProto,
@@ -147,6 +147,14 @@ pub enum JobCommand {
         format: crate::display::DisplayFormat,
         #[clap(long)]
         no_truncate: bool,
+    },
+    FeedToStream {
+        #[clap(short = 'j', long)]
+        job_id: i64,
+        #[clap(short, long, help = "Feed data (JSON string or raw text)")]
+        data: String,
+        #[clap(long, help = "Signal that this is the final feed data chunk")]
+        is_final: bool,
     },
 }
 
@@ -759,6 +767,25 @@ impl JobCommand {
                 };
 
                 println!("{output}");
+            }
+            JobCommand::FeedToStream {
+                job_id,
+                data,
+                is_final,
+            } => {
+                let request = FeedToStreamRequest {
+                    job_id: Some(JobId { value: *job_id }),
+                    data: data.as_bytes().to_vec(),
+                    is_final: *is_final,
+                };
+                let response = client
+                    .job_client()
+                    .await
+                    .feed_to_stream(to_request(&metadata, request).unwrap())
+                    .await
+                    .unwrap()
+                    .into_inner();
+                println!("accepted: {}", response.accepted);
             }
         }
         async fn print_job_with_request(
