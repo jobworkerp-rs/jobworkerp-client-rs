@@ -30,6 +30,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::InlineWorkflow => "INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "REUSABLE_WORKFLOW",
                 RunnerType::CreateWorkflow => "CREATE_WORKFLOW",
+                RunnerType::FunctionSetSelector => "FUNCTION_SET_SELECTOR",
             }
             .to_string(),
             DisplayFormat::Card => match runner_type {
@@ -48,6 +49,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::InlineWorkflow => "🔄 INLINE_WORKFLOW",
                 RunnerType::ReusableWorkflow => "🔄 REUSABLE_WORKFLOW",
                 RunnerType::CreateWorkflow => "🔄 CREATE_WORKFLOW",
+                RunnerType::FunctionSetSelector => "🔍 FUNCTION_SET_SELECTOR",
             }
             .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
