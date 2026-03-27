@@ -130,4 +130,35 @@ impl JobworkerpClientWrapper {
             Err(ClientError::NotFound("runner not found: WORKFLOW".to_string()).into())
         }
     }
+
+    /// Execute any pre-registered worker by name with JSON arguments.
+    /// Resolves WorkerData at runtime via worker_name (not worker_id, which is unstable).
+    pub async fn execute_worker_by_name(
+        &self,
+        worker_name: &str,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let (_worker_id, worker_data) = self
+            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Worker not found: worker_name='{}' on jobworkerp server",
+                    worker_name
+                )
+            })?;
+
+        self.enqueue_with_json(
+            None,
+            Arc::new(HashMap::new()),
+            &worker_data,
+            args_json,
+            self.request_timeout()
+                .map(|t| t.as_secs() as u32)
+                .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC),
+            using,
+        )
+        .await
+    }
 }
