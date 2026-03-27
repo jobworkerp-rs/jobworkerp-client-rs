@@ -29,8 +29,8 @@ use crate::{
             WorkerData,
         },
         service::{
-            CountCondition, FindListRequest,
-            FindListWithProcessingStatusRequest, JobRequest, job_request,
+            CountCondition, FindListRequest, FindListWithProcessingStatusRequest, JobRequest,
+            job_request,
         },
     },
     proto::JobworkerpProto,
