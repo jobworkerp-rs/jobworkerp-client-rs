@@ -31,6 +31,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::ReusableWorkflow => "REUSABLE_WORKFLOW",
                 RunnerType::CreateWorkflow => "CREATE_WORKFLOW",
                 RunnerType::FunctionSetSelector => "FUNCTION_SET_SELECTOR",
+                RunnerType::Grpc => "GRPC",
             }
             .to_string(),
             DisplayFormat::Card => match runner_type {
@@ -50,6 +51,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::ReusableWorkflow => "🔄 REUSABLE_WORKFLOW",
                 RunnerType::CreateWorkflow => "🔄 CREATE_WORKFLOW",
                 RunnerType::FunctionSetSelector => "🔍 FUNCTION_SET_SELECTOR",
+                RunnerType::Grpc => "🔗 GRPC",
             }
             .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
@@ -185,6 +187,20 @@ mod tests {
         assert_eq!(
             formatter.format(RunnerType::InlineWorkflow, &DisplayFormat::Json),
             "INLINE_WORKFLOW"
+        );
+
+        // Test Grpc variant (multi-method GRPC runner)
+        assert_eq!(
+            formatter.format(RunnerType::Grpc, &DisplayFormat::Table),
+            "GRPC"
+        );
+        assert_eq!(
+            formatter.format(RunnerType::Grpc, &DisplayFormat::Card),
+            "🔗 GRPC"
+        );
+        assert_eq!(
+            formatter.format(RunnerType::Grpc, &DisplayFormat::Json),
+            "GRPC"
         );
     }
 
