@@ -387,11 +387,12 @@ impl JobCommand {
                     self.create_parent_span("jobworkerp-client", "JobCommand::EnqueueWorkflow");
                 let cx = Some(cx);
 
+                let using = Some("run");
                 let runner = helper
                     .find_runner_by_name(
                         cx.as_ref(),
                         metadata.clone(),
-                        RunnerType::InlineWorkflow.as_str_name(),
+                        RunnerType::Workflow.as_str_name(),
                     )
                     .await
                     .unwrap();
@@ -419,21 +420,23 @@ impl JobCommand {
                         use_static: false,
                         ..Default::default()
                     };
-                    let args = match JobworkerpProto::parse_job_args_schema_descriptor(&rdata, None)
+                    let args = match JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
                         })
                         .unwrap()
                     {
                         Some(args_descriptor) => {
-                            let context = context.as_deref().unwrap_or("");
-                            let job_args = serde_json::json!({
+                            let mut job_args = serde_json::json!({
                                 "workflow_url": serde_json::Value::String(workflow_file.clone()),
                                 "input": serde_json::Value::String(input.clone()),
-                                // serde_json::from_str::<serde_json::Value>(input.as_str())
-                                //     .unwrap_or_else(|_| serde_json::Value::String(input.clone())),
-                                "workflow_context": context,
                             });
+                            if let Some(ctx) = context.as_deref()
+                                && !ctx.is_empty()
+                            {
+                                job_args["workflow_context"] =
+                                    serde_json::Value::String(ctx.to_string());
+                            }
                             JobworkerpProto::json_value_to_message(
                                 args_descriptor,
                                 &job_args,
@@ -451,7 +454,7 @@ impl JobCommand {
                             return;
                         }
                     };
-                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, None)
+                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
                         })
@@ -465,7 +468,7 @@ impl JobCommand {
                             timeout.map(|t| (t / 1000) as u32).unwrap_or(3600),
                             *run_after_time,
                             priority.clone().map(|p| p.to_grpc()),
-                            None, // using is None for workflow runners
+                            using,
                         )
                         .await;
                     // Clean up temp worker regardless of enqueue result
@@ -572,7 +575,7 @@ impl JobCommand {
                 } else {
                     println!(
                         "runner {} not found",
-                        RunnerType::InlineWorkflow.as_str_name()
+                        RunnerType::Workflow.as_str_name()
                     );
                     return;
                 }
