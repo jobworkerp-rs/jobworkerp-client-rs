@@ -1,6 +1,8 @@
-//! JobProcessingStatus-specific display functionality
+#![allow(clippy::doc_markdown, clippy::must_use_candidate)]
+
+//! `JobProcessingStatus`-specific display functionality
 //!
-//! This module handles the conversion of JobProcessingStatus data structures to JSON format
+//! This module handles the conversion of `JobProcessingStatus` data structures to JSON format
 //! with appropriate enum decoration and formatting.
 
 use crate::display::DisplayFormat;
@@ -10,7 +12,7 @@ use crate::jobworkerp::service::{JobProcessingStatusDetailResponse, JobProcessin
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 
-/// Formatter for JobProcessingStatus enum
+/// Formatter for `JobProcessingStatus` enum
 pub struct JobProcessingStatusFormatter;
 
 impl EnumFormatter<JobProcessingStatus> for JobProcessingStatusFormatter {
@@ -38,28 +40,24 @@ impl EnumFormatter<JobProcessingStatus> for JobProcessingStatusFormatter {
 }
 
 /// Format timestamp (milliseconds) as ISO 8601 string
-fn format_timestamp(millis: i64, format: &DisplayFormat) -> JsonValue {
-    match format {
-        DisplayFormat::Json => serde_json::json!(millis),
-        _ => {
-            let datetime = DateTime::<Utc>::from_timestamp_millis(millis);
-            match datetime {
-                Some(dt) => serde_json::json!(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
-                None => serde_json::json!(millis),
-            }
-        }
+fn format_timestamp(millis: i64, format: DisplayFormat) -> JsonValue {
+    if format == DisplayFormat::Json {
+        serde_json::json!(millis)
+    } else {
+        DateTime::<Utc>::from_timestamp_millis(millis).map_or_else(
+            || serde_json::json!(millis),
+            |dt| serde_json::json!(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+        )
     }
 }
 
 /// Format optional timestamp
-fn format_optional_timestamp(millis: Option<i64>, format: &DisplayFormat) -> JsonValue {
-    match millis {
-        Some(m) => format_timestamp(m, format),
-        None => serde_json::json!(null),
-    }
+fn format_optional_timestamp(millis: Option<i64>, format: DisplayFormat) -> JsonValue {
+    millis.map_or(serde_json::json!(null), |m| format_timestamp(m, format))
 }
 
-/// Convert JobProcessingStatusResponse to JSON with format-specific enum decoration
+/// Convert `JobProcessingStatusResponse` to JSON with format-specific enum decoration
+#[must_use]
 pub fn job_processing_status_to_json(
     response: &JobProcessingStatusResponse,
     format: &DisplayFormat,
@@ -72,7 +70,8 @@ pub fn job_processing_status_to_json(
     })
 }
 
-/// Convert JobProcessingStatusDetailResponse to JSON with format-specific decoration
+/// Convert `JobProcessingStatusDetailResponse` to JSON with format-specific decoration
+#[must_use]
 pub fn job_processing_status_detail_to_json(
     response: &JobProcessingStatusDetailResponse,
     format: &DisplayFormat,
@@ -85,16 +84,16 @@ pub fn job_processing_status_detail_to_json(
         "worker_id": response.worker_id,
         "channel": response.channel,
         "priority": response.priority,
-        "enqueue_time": format_timestamp(response.enqueue_time, format),
-        "updated_at": format_timestamp(response.updated_at, format),
+        "enqueue_time": format_timestamp(response.enqueue_time, *format),
+        "updated_at": format_timestamp(response.updated_at, *format),
     });
 
     // Optional fields
     if response.start_time.is_some() {
-        json["start_time"] = format_optional_timestamp(response.start_time, format);
+        json["start_time"] = format_optional_timestamp(response.start_time, *format);
     }
     if response.pending_time.is_some() {
-        json["pending_time"] = format_optional_timestamp(response.pending_time, format);
+        json["pending_time"] = format_optional_timestamp(response.pending_time, *format);
     }
     if let Some(is_streamable) = response.is_streamable {
         json["is_streamable"] = serde_json::json!(is_streamable);
@@ -135,14 +134,14 @@ mod tests {
 
     #[test]
     fn test_format_timestamp() {
-        let millis = 1703001600000i64; // 2023-12-19 12:00:00 UTC
+        let millis = 1_703_001_600_000_i64; // 2023-12-19 12:00:00 UTC
 
         // JSON returns raw millis
-        let json_result = format_timestamp(millis, &DisplayFormat::Json);
+        let json_result = format_timestamp(millis, DisplayFormat::Json);
         assert_eq!(json_result, serde_json::json!(millis));
 
         // Other formats return formatted string
-        let table_result = format_timestamp(millis, &DisplayFormat::Table);
+        let table_result = format_timestamp(millis, DisplayFormat::Table);
         assert!(table_result.is_string());
     }
 }

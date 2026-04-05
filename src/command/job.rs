@@ -1,3 +1,19 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::module_name_repetitions,
+    clippy::items_after_statements,
+    clippy::similar_names,
+    clippy::option_if_let_else,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::unused_self
+)]
+
 // as job: valid commands are enqueue, find, list, delete, count
 // -i, --id <id> id of the job (for find, delete)
 // -w, --worker <id or name> worker id or name of the job (if string, treat as name, if number, treat as id)(for enqueue)
@@ -166,23 +182,25 @@ pub enum JobProcessingStatusArg {
     Cancelling,
 }
 impl PriorityArg {
-    pub fn to_grpc(&self) -> Priority {
+    #[must_use]
+    pub const fn to_grpc(&self) -> Priority {
         match self {
-            PriorityArg::High => Priority::High,
-            PriorityArg::Middle => Priority::Medium,
-            PriorityArg::Low => Priority::Low,
+            Self::High => Priority::High,
+            Self::Middle => Priority::Medium,
+            Self::Low => Priority::Low,
         }
     }
 }
 
 impl JobProcessingStatusArg {
-    pub fn to_grpc(&self) -> JobProcessingStatus {
+    #[must_use]
+    pub const fn to_grpc(&self) -> JobProcessingStatus {
         match self {
-            JobProcessingStatusArg::Unknown => JobProcessingStatus::Unknown,
-            JobProcessingStatusArg::Pending => JobProcessingStatus::Pending,
-            JobProcessingStatusArg::Running => JobProcessingStatus::Running,
-            JobProcessingStatusArg::WaitResult => JobProcessingStatus::WaitResult,
-            JobProcessingStatusArg::Cancelling => JobProcessingStatus::Cancelling,
+            Self::Unknown => JobProcessingStatus::Unknown,
+            Self::Pending => JobProcessingStatus::Pending,
+            Self::Running => JobProcessingStatus::Running,
+            Self::WaitResult => JobProcessingStatus::WaitResult,
+            Self::Cancelling => JobProcessingStatus::Cancelling,
         }
     }
 }
@@ -210,7 +228,7 @@ impl JobCommand {
         metadata: Arc<HashMap<String, String>>,
     ) {
         match self {
-            JobCommand::Enqueue {
+            Self::Enqueue {
                 worker,
                 args,
                 unique_key,
@@ -237,6 +255,7 @@ impl JobCommand {
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
                     timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
                     using: using.clone(),
+                    overrides: None,
                 };
                 let response = client
                     .job_client()
@@ -266,7 +285,7 @@ impl JobCommand {
                     println!("{response:#?}");
                 }
             }
-            JobCommand::EnqueueForStream {
+            Self::EnqueueForStream {
                 worker,
                 args,
                 unique_key,
@@ -295,6 +314,7 @@ impl JobCommand {
                     priority: priority.clone().map(|p| p.to_grpc() as i32),
                     timeout: timeout.and_then(|t| if t > 0 { Some(t) } else { None }),
                     using: using.clone(),
+                    overrides: None,
                 };
                 let response = client
                     .job_client()
@@ -313,7 +333,7 @@ impl JobCommand {
 
                 // Create display options
                 let display_options = crate::display::DisplayOptions {
-                    format: format.clone(),
+                    format: *format,
                     color_enabled: true,
                     max_field_length: None,
                     use_unicode: true,
@@ -345,14 +365,17 @@ impl JobCommand {
                             item_count += 1;
                         }
                         Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
-                            JobResultCommand::print_streaming_output(
-                                v.as_slice(),
-                                result_desc.clone(),
-                                format,
-                                &display_options,
-                                item_count,
-                            );
-                            item_count += 1;
+                            // Only display if no Data chunks were output yet
+                            if item_count == 0 {
+                                JobResultCommand::print_streaming_output(
+                                    v.as_slice(),
+                                    result_desc.clone(),
+                                    format,
+                                    &display_options,
+                                    item_count,
+                                );
+                                item_count += 1;
+                            }
                         }
                         Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                             break;
@@ -365,13 +388,8 @@ impl JobCommand {
 
                 // End streaming session
                 JobResultCommand::end_streaming_session(item_count, format, &display_options);
-                // if let Some(result) = response.result {
-                //     JobResultCommand::print_job_result(&result, result_desc);
-                // } else {
-                //     println!("{:#?}", response);
-                // }
             }
-            JobCommand::EnqueueWorkflow {
+            Self::EnqueueWorkflow {
                 channel,
                 context,
                 input,
@@ -420,45 +438,48 @@ impl JobCommand {
                         use_static: false,
                         ..Default::default()
                     };
-                    let args = match JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to parse job_args schema descriptor: {e:#?}")
-                        })
-                        .unwrap()
-                    {
-                        Some(args_descriptor) => {
-                            let mut job_args = serde_json::json!({
-                                "workflow_url": serde_json::Value::String(workflow_file.clone()),
-                                "input": serde_json::Value::String(input.clone()),
-                            });
-                            if let Some(ctx) = context.as_deref()
-                                && !ctx.is_empty()
-                            {
-                                job_args["workflow_context"] =
-                                    serde_json::Value::String(ctx.to_string());
-                            }
-                            JobworkerpProto::json_value_to_message(
-                                args_descriptor,
-                                &job_args,
-                                true,
-                                true,
-                            )
+                    let args = if let Some(args_descriptor) =
+                        JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)
                             .map_err(|e| {
-                                println!("Failed to parse job_args schema: {:#?}", &e);
-                                anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
+                                anyhow::anyhow!(
+                                    "Failed to parse job_args schema descriptor: {e:#?}"
+                                )
                             })
                             .unwrap()
+                    {
+                        let mut job_args = serde_json::json!({
+                            "workflow_url": serde_json::Value::String(workflow_file.clone()),
+                            "input": serde_json::Value::String(input.clone()),
+                        });
+                        if let Some(ctx) = context.as_deref()
+                            && !ctx.is_empty()
+                        {
+                            job_args["workflow_context"] =
+                                serde_json::Value::String(ctx.to_string());
                         }
-                        _ => {
-                            println!("args_descriptor not found");
-                            return;
-                        }
-                    };
-                    let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
+                        JobworkerpProto::json_value_to_message(
+                            args_descriptor,
+                            &job_args,
+                            true,
+                            true,
+                        )
                         .map_err(|e| {
-                            anyhow::anyhow!("Failed to parse job_result schema descriptor: {e:#?}")
+                            println!("Failed to parse job_args schema: {:#?}", &e);
+                            anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
                         })
-                        .unwrap();
+                        .unwrap()
+                    } else {
+                        println!("args_descriptor not found");
+                        return;
+                    };
+                    let result_desc =
+                        JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to parse job_result schema descriptor: {e:#?}"
+                                )
+                            })
+                            .unwrap();
                     let enqueue_result = helper
                         .enqueue_stream_worker_job(
                             cx.as_ref(),
@@ -491,7 +512,7 @@ impl JobCommand {
                     }
                     // Create display options for workflow
                     let display_options = crate::display::DisplayOptions {
-                        format: format.clone(),
+                        format: *format,
                         color_enabled: true,
                         max_field_length: None,
                         use_unicode: true,
@@ -525,14 +546,17 @@ impl JobCommand {
                                 item_count += 1;
                             }
                             Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
-                                JobResultCommand::print_streaming_output(
-                                    v.as_slice(),
-                                    result_desc.clone(),
-                                    format,
-                                    &display_options,
-                                    item_count,
-                                );
-                                item_count += 1;
+                                // Only display if no Data chunks were output yet
+                                if item_count == 0 {
+                                    JobResultCommand::print_streaming_output(
+                                        v.as_slice(),
+                                        result_desc.clone(),
+                                        format,
+                                        &display_options,
+                                        item_count,
+                                    );
+                                    item_count += 1;
+                                }
                             }
                             Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                                 break;
@@ -573,15 +597,12 @@ impl JobCommand {
                         }
                     }
                 } else {
-                    println!(
-                        "runner {} not found",
-                        RunnerType::Workflow.as_str_name()
-                    );
+                    println!("runner {} not found", RunnerType::Workflow.as_str_name());
                     return;
                 }
             }
 
-            JobCommand::Find { id } => {
+            Self::Find { id } => {
                 let id = JobId { value: *id };
                 let response = client.job_client().await.find(id).await.unwrap();
                 let job = response.into_inner();
@@ -591,7 +612,7 @@ impl JobCommand {
                     println!("job not found");
                 }
             }
-            JobCommand::List {
+            Self::List {
                 offset,
                 limit,
                 format,
@@ -643,7 +664,7 @@ impl JobCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -664,12 +685,12 @@ impl JobCommand {
 
                 println!("{output}");
             }
-            JobCommand::Delete { id } => {
+            Self::Delete { id } => {
                 let id = JobId { value: *id };
                 let response = client.job_client().await.delete(id).await.unwrap();
                 println!("{response:#?}");
             }
-            JobCommand::Count {} => {
+            Self::Count {} => {
                 let response = client
                     .job_client()
                     .await
@@ -678,7 +699,7 @@ impl JobCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            JobCommand::ListWithProcessingStatus {
+            Self::ListWithProcessingStatus {
                 status,
                 limit,
                 format,
@@ -742,7 +763,7 @@ impl JobCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -824,7 +845,7 @@ struct JobCommandHelper {
     client: crate::client::JobworkerpClient,
 }
 impl JobCommandHelper {
-    pub fn new(client: crate::client::JobworkerpClient) -> Self {
+    pub const fn new(client: crate::client::JobworkerpClient) -> Self {
         Self { client }
     }
 }

@@ -23,26 +23,28 @@ pub enum ClientError {
 }
 
 impl ClientError {
-    /// Convert tonic::Status to ClientError based on gRPC status code
+    /// Convert `tonic::Status` to `ClientError` based on gRPC status code
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_tonic_status(status: tonic::Status) -> Self {
         let message = status.message().to_string();
         match status.code() {
-            tonic::Code::NotFound => ClientError::NotFound(message),
+            tonic::Code::NotFound => Self::NotFound(message),
             tonic::Code::InvalidArgument | tonic::Code::OutOfRange => {
-                ClientError::InvalidParameter(message)
+                Self::InvalidParameter(message)
             }
-            tonic::Code::AlreadyExists | tonic::Code::Aborted => ClientError::Conflict(message),
-            tonic::Code::DeadlineExceeded => ClientError::TimeoutError(message),
+            tonic::Code::AlreadyExists | tonic::Code::Aborted => Self::Conflict(message),
+            tonic::Code::DeadlineExceeded => Self::TimeoutError(message),
             tonic::Code::Unauthenticated
             | tonic::Code::PermissionDenied
             | tonic::Code::Unavailable
-            | tonic::Code::ResourceExhausted => ClientError::ExternalServiceError(message),
+            | tonic::Code::ResourceExhausted => Self::ExternalServiceError(message),
             tonic::Code::FailedPrecondition
             | tonic::Code::Internal
             | tonic::Code::Cancelled
-            | tonic::Code::DataLoss => ClientError::RuntimeError(message),
-            tonic::Code::Unimplemented => ClientError::UnimplementedError(message),
-            _ => ClientError::UnknownError(message),
+            | tonic::Code::DataLoss => Self::RuntimeError(message),
+            tonic::Code::Unimplemented => Self::UnimplementedError(message),
+            _ => Self::UnknownError(message),
         }
     }
 }

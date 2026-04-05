@@ -4,7 +4,7 @@ use crate::jobworkerp::data::StreamingOutputType;
 use clap::ValueEnum;
 
 /// Available display formats for CLI output
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DisplayFormat {
     /// Table format with columns and borders
     #[value(name = "table")]
@@ -20,9 +20,9 @@ pub enum DisplayFormat {
 impl std::fmt::Display for DisplayFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DisplayFormat::Table => write!(f, "table"),
-            DisplayFormat::Card => write!(f, "card"),
-            DisplayFormat::Json => write!(f, "json"),
+            Self::Table => write!(f, "table"),
+            Self::Card => write!(f, "card"),
+            Self::Json => write!(f, "json"),
         }
     }
 }
@@ -32,7 +32,7 @@ pub trait EnumFormatter<T> {
     fn format(&self, value: T, format: &DisplayFormat) -> String;
 }
 
-/// Formatter for StreamingOutputType enum
+/// Formatter for `StreamingOutputType` enum
 pub struct StreamingOutputTypeFormatter;
 
 impl EnumFormatter<StreamingOutputType> for StreamingOutputTypeFormatter {
@@ -60,6 +60,7 @@ pub mod color {
     use yansi::Paint;
 
     /// Apply color to text if color is enabled
+    #[must_use]
     pub fn colorize_text(text: &str, color: &str, enabled: bool) -> String {
         if !enabled {
             return text.to_string();
@@ -78,6 +79,7 @@ pub mod color {
     }
 
     /// Colorize status text with appropriate color
+    #[must_use]
     pub fn colorize_status(status: &str, enabled: bool) -> String {
         let color = match status.to_lowercase().as_str() {
             s if s.contains("running") => "green",
@@ -90,6 +92,7 @@ pub mod color {
     }
 
     /// Colorize priority text with appropriate color
+    #[must_use]
     pub fn colorize_priority(priority: &str, enabled: bool) -> String {
         let color = match priority.to_lowercase().as_str() {
             s if s.contains("high") => "red",

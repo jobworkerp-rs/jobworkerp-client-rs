@@ -105,10 +105,16 @@ pub enum FunctionCommand {
     },
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::missing_panics_doc,
+    clippy::items_after_statements,
+    clippy::similar_names
+)]
 impl FunctionCommand {
     pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
-            FunctionCommand::List {
+            Self::List {
                 exclude_runner,
                 exclude_worker,
                 format,
@@ -142,7 +148,7 @@ impl FunctionCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -168,7 +174,7 @@ impl FunctionCommand {
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionCommand::ListBySet {
+            Self::ListBySet {
                 name,
                 format,
                 no_truncate,
@@ -198,7 +204,7 @@ impl FunctionCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -224,7 +230,7 @@ impl FunctionCommand {
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionCommand::Call {
+            Self::Call {
                 function_name,
                 runner_name,
                 worker_name,
@@ -257,7 +263,6 @@ impl FunctionCommand {
                 let runner_parameters = if runner_name.is_some() {
                     // Parse queue_type and response_type
                     let queue_type_value = queue_type.as_ref().map(|qt| match qt.as_str() {
-                        "NORMAL" => QueueType::Normal as i32,
                         "DB_ONLY" => QueueType::DbOnly as i32,
                         "WITH_BACKUP" => QueueType::WithBackup as i32,
                         _ => QueueType::Normal as i32,
@@ -265,7 +270,6 @@ impl FunctionCommand {
 
                     let response_type_value = response_type.as_ref().map(|rt| match rt.as_str() {
                         "NO_RESULT" => ResponseType::NoResult as i32,
-                        "DIRECT" => ResponseType::Direct as i32,
                         _ => ResponseType::Direct as i32,
                     });
 
@@ -332,7 +336,7 @@ impl FunctionCommand {
                     result_stream.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionCommand::Find {
+            Self::Find {
                 runner_id,
                 worker_id,
                 format,
@@ -390,7 +394,7 @@ impl FunctionCommand {
                         let function_json = function_to_json(&specs, format);
                         let functions_vec = vec![function_json];
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
@@ -416,7 +420,7 @@ impl FunctionCommand {
                     }
                 }
             }
-            FunctionCommand::FindByName {
+            Self::FindByName {
                 runner_name,
                 worker_name,
                 format,
@@ -473,7 +477,7 @@ impl FunctionCommand {
                         let function_json = function_to_json(&specs, format);
                         let functions_vec = vec![function_json];
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
@@ -502,6 +506,7 @@ impl FunctionCommand {
         }
     }
 
+    #[allow(clippy::missing_panics_doc)]
     pub fn print_function(function: &FunctionSpecs) {
         println!("[function]:");
 
@@ -516,10 +521,10 @@ impl FunctionCommand {
         println!("\t[description] {}", &function.description);
 
         // Print settings schema
-        if !function.settings_schema.is_empty() {
-            println!("\t[settings_schema] |\n---\n{}", &function.settings_schema);
-        } else {
+        if function.settings_schema.is_empty() {
             println!("\t[settings_schema] (None)");
+        } else {
+            println!("\t[settings_schema] |\n---\n{}", &function.settings_schema);
         }
 
         // Print methods
@@ -529,10 +534,10 @@ impl FunctionCommand {
             } else if method_map.schemas.len() == 1 {
                 // Single method - detailed display
                 let (method_name, method_schema) = method_map.schemas.iter().next().unwrap();
-                println!("\t[method] {}", method_name);
+                println!("\t[method] {method_name}");
 
                 if let Some(desc) = &method_schema.description {
-                    println!("\t\t[description] {}", desc);
+                    println!("\t\t[description] {desc}");
                 }
 
                 println!(
@@ -541,7 +546,7 @@ impl FunctionCommand {
                 );
 
                 if let Some(result_schema) = &method_schema.result_schema {
-                    println!("\t\t[result_schema] |\n---\n{}", result_schema);
+                    println!("\t\t[result_schema] |\n---\n{result_schema}");
                 } else {
                     println!("\t\t[result_schema] (None)");
                 }
@@ -558,19 +563,19 @@ impl FunctionCommand {
                 if let Some(annotations) = &method_schema.annotations {
                     println!("\t\t[annotations]:");
                     if let Some(title) = &annotations.title {
-                        println!("\t\t\t[title] {}", title);
+                        println!("\t\t\t[title] {title}");
                     }
                     if let Some(read_only) = annotations.read_only_hint {
-                        println!("\t\t\t[read_only_hint] {}", read_only);
+                        println!("\t\t\t[read_only_hint] {read_only}");
                     }
                     if let Some(destructive) = annotations.destructive_hint {
-                        println!("\t\t\t[destructive_hint] {}", destructive);
+                        println!("\t\t\t[destructive_hint] {destructive}");
                     }
                     if let Some(idempotent) = annotations.idempotent_hint {
-                        println!("\t\t\t[idempotent_hint] {}", idempotent);
+                        println!("\t\t\t[idempotent_hint] {idempotent}");
                     }
                     if let Some(open_world) = annotations.open_world_hint {
-                        println!("\t\t\t[open_world_hint] {}", open_world);
+                        println!("\t\t\t[open_world_hint] {open_world}");
                     }
                 }
             } else {
@@ -580,9 +585,9 @@ impl FunctionCommand {
                 method_names.sort();
                 for method_name in method_names {
                     let method_schema = &method_map.schemas[method_name];
-                    println!("\t\t[method] {}", method_name);
+                    println!("\t\t[method] {method_name}");
                     if let Some(desc) = &method_schema.description {
-                        println!("\t\t\t[description] {}", desc);
+                        println!("\t\t\t[description] {desc}");
                     }
                     println!(
                         "\t\t\t[output_type] {}",
