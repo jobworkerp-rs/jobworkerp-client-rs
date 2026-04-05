@@ -1,3 +1,12 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::option_if_let_else,
+    clippy::trait_duplication_in_bounds,
+    clippy::redundant_pub_crate
+)]
+
 use super::UseJobworkerpClient;
 use crate::command::to_request;
 use crate::error::ClientError;
@@ -30,7 +39,7 @@ pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     basis: 2.0,
 };
 
-/// Build WorkerData with default settings from runner
+/// Build `WorkerData` with default settings from runner
 fn build_worker_data_default(
     name: &str,
     runner_id: RunnerId,
@@ -53,7 +62,7 @@ fn build_worker_data_default(
     }
 }
 
-/// Build WorkerData from JSON parameters
+/// Build `WorkerData` from JSON parameters
 fn build_worker_data_from_json(
     name: &str,
     runner_id: RunnerId,
@@ -63,18 +72,18 @@ fn build_worker_data_from_json(
     WorkerData {
         name: params
             .get("name")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string))
             .unwrap_or_else(|| name.to_string()),
         description: params
             .get("description")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string))
             .unwrap_or_default(),
         runner_id: Some(runner_id),
         runner_settings,
         periodic_interval: 0,
         channel: params
             .get("channel")
-            .and_then(|v| v.as_str().map(|s| s.to_string())),
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string)),
         queue_type: params
             .get("queue_type")
             .and_then(|v| v.as_str())
@@ -83,22 +92,22 @@ fn build_worker_data_from_json(
         response_type: ResponseType::Direct as i32,
         store_success: params
             .get("store_success")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         store_failure: params
             .get("store_failure")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
         use_static: params
             .get("use_static")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         retry_policy: Some(DEFAULT_RETRY_POLICY),
         broadcast_results: true,
     }
 }
 
-/// Build JobRequest from parameters
+/// Build `JobRequest` from parameters
 fn build_job_request(
     worker_id: WorkerId,
     args: Vec<u8>,
@@ -115,7 +124,7 @@ fn build_job_request(
         )),
         priority: priority.map(|p| p as i32),
         run_after_time,
-        using: using.map(|s| s.to_string()),
+        using: using.map(std::string::ToString::to_string),
         ..Default::default()
     }
 }
@@ -487,7 +496,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
-    /// Upsert a worker by name: update if exists (preserving worker ID), create if not.
+    /// Upsert a worker by name using server-side `UpsertByName` RPC.
     fn upsert_worker<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -496,114 +505,37 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     ) -> impl std::future::Future<Output = Result<Worker>> + Send + 'a {
         async move {
             let client_clone = self.jobworkerp_client().clone();
-            let worker_name_for_find = worker_data.name.clone();
+            let upsert_request = tonic::Request::new(worker_data.clone());
 
-            let find_request = tonic::Request::new(WorkerNameRequest {
-                name: worker_name_for_find,
-            });
+            let worker_id: Option<WorkerId> = Self::trace_grpc_client_with_request(
+                cx.cloned(),
+                "jobworkerp-client",
+                "upsert_worker.upsert_by_name",
+                "upsert_by_name",
+                upsert_request,
+                {
+                    let metadata_clone = metadata.clone();
+                    move |req| async move {
+                        client_clone
+                            .worker_client()
+                            .await
+                            .upsert_by_name(to_request(&metadata_clone, req)?)
+                            .await
+                            .map(|response| response.into_inner().id)
+                            .map_err(|e| ClientError::from_tonic_status(e).into())
+                    }
+                },
+            )
+            .await?;
 
-            let metadata_clone = metadata.clone();
-            let found_worker_opt_res: Result<Option<Worker>> =
-                Self::trace_grpc_client_with_request(
-                    cx.cloned(),
-                    "jobworkerp-client",
-                    "upsert_worker.find_by_name",
-                    "find_by_name",
-                    find_request,
-                    {
-                        let client_clone_inner = client_clone.clone();
-                        move |req| async move {
-                            client_clone_inner
-                                .worker_client()
-                                .await
-                                .find_by_name(to_request(&metadata_clone, req)?)
-                                .await
-                                .map(|response| response.into_inner().data)
-                                .map_err(|e| ClientError::from_tonic_status(e).into())
-                        }
-                    },
-                )
-                .await;
+            let worker_id = worker_id.ok_or_else(|| {
+                ClientError::RuntimeError("upsert_by_name response id is None".to_string())
+            })?;
 
-            let found_worker_opt = found_worker_opt_res?;
-
-            if let Some(Worker {
-                id: Some(wid),
-                data: Some(_),
-            }) = found_worker_opt
-            {
-                tracing::debug!(
-                    "worker {} found (id={}). updating with current settings",
-                    &worker_data.name,
-                    wid.value
-                );
-                let update_worker = Worker {
-                    id: Some(wid),
-                    data: Some(worker_data.clone()),
-                };
-                let update_tonic_request = tonic::Request::new(update_worker.clone());
-
-                let metadata_clone = metadata.clone();
-                Self::trace_grpc_client_with_request(
-                    cx.cloned(),
-                    "jobworkerp-client",
-                    "upsert_worker.update",
-                    "update",
-                    update_tonic_request,
-                    {
-                        move |req| async move {
-                            client_clone
-                                .worker_client()
-                                .await
-                                .update(to_request(&metadata_clone, req)?)
-                                .await
-                                .map(|_| ())
-                                .map_err(|e| ClientError::from_tonic_status(e).into())
-                        }
-                    },
-                )
-                .await?;
-
-                Ok(update_worker)
-            } else {
-                tracing::debug!("worker {} not found. create new worker", &worker_data.name);
-                let create_request_data = worker_data.clone();
-                let create_tonic_request = tonic::Request::new(create_request_data);
-
-                let metadata_clone = metadata.clone();
-                let created_worker_id_opt_res: Result<Option<WorkerId>> =
-                    Self::trace_grpc_client_with_request(
-                        cx.cloned(),
-                        "jobworkerp-client",
-                        "upsert_worker.create",
-                        "create",
-                        create_tonic_request,
-                        {
-                            let client_clone_inner_create = client_clone.clone();
-                            move |req| async move {
-                                client_clone_inner_create
-                                    .worker_client()
-                                    .await
-                                    .create(to_request(&metadata_clone, req)?)
-                                    .await
-                                    .map(|response| response.into_inner().id)
-                                    .map_err(|e| ClientError::from_tonic_status(e).into())
-                            }
-                        },
-                    )
-                    .await;
-
-                let created_worker_id = created_worker_id_opt_res?.ok_or_else(|| {
-                    ClientError::RuntimeError(
-                        "create worker response is empty or id is None".to_string(),
-                    )
-                })?;
-
-                Ok(Worker {
-                    id: Some(created_worker_id),
-                    data: Some(worker_data.to_owned()),
-                })
-            }
+            Ok(Worker {
+                id: Some(worker_id),
+                data: Some(worker_data.to_owned()),
+            })
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -713,7 +645,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         ClientError::NotFound(format!("job result output is empty: {res:?}"))
                     })?
                     .items
-                    .to_owned();
+                    .clone();
                 Ok(output)
             } else {
                 Err(ClientError::RuntimeError(format!(
@@ -769,7 +701,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .enqueue(to_request(&metadata, req)?)
                         .await
-                        .map(|r| r.into_inner())
+                        .map(tonic::Response::into_inner)
                         .map_err(|e| ClientError::from_tonic_status(e).into())
                 },
             )
@@ -854,7 +786,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 timeout: Some((timeout_sec * 1000).into()),
                 worker: Some(worker_spec.clone()),
                 priority: Some(Priority::High as i32),
-                using: using.map(|s| s.to_string()),
+                using: using.map(std::string::ToString::to_string),
                 ..Default::default()
             };
             let tonic_request = tonic::Request::new(job_request_payload);
@@ -891,20 +823,18 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 let output_item = res
                     .output
                     .ok_or_else(|| ClientError::NotFound("job result output is empty".to_string()))?
-                    .items
-                    .to_owned();
+                    .items;
                 Ok(output_item)
             } else {
-                let error_message = res
-                    .output
-                    .as_ref()
-                    .map(|e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned())
-                    .unwrap_or_else(|| format!("job failed with status: {:?}", res.status()));
+                let error_message = res.output.as_ref().map_or_else(
+                    || format!("job failed with status: {:?}", res.status()),
+                    |e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned(),
+                );
                 Err(ClientError::RuntimeError(format!("job failed: {error_message}")).into())
             }
         }
     }
-    /// Create WorkerData from runner ID and settings
+    /// Create `WorkerData` from runner ID and settings
     fn create_worker_with_runner_id(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -925,7 +855,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             self.upsert_worker(cx, metadata, &worker).await
         }
     }
-    /// Create WorkerData by looking up runner by name
+    /// Create `WorkerData` by looking up runner by name
     fn create_worker_from_runner(
         &self,
         cx: Option<&opentelemetry::Context>,
@@ -961,19 +891,17 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         job_timeout_sec: u32,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
-        let using = using.map(|s| s.to_owned());
+        let using = using.map(std::borrow::ToOwned::to_owned);
         async move {
-            let (wid, wdata) = match worker {
-                Worker {
-                    id: Some(wid),
-                    data: Some(wdata),
-                } => (wid, wdata),
-                _ => {
-                    return Err(ClientError::InvalidParameter(
-                        "Invalid worker: missing id or data".to_string(),
-                    )
-                    .into());
-                }
+            let Worker {
+                id: Some(wid),
+                data: Some(wdata),
+            } = worker
+            else {
+                return Err(ClientError::InvalidParameter(
+                    "Invalid worker: missing id or data".to_string(),
+                )
+                .into());
             };
 
             let w = crate::jobworkerp::service::job_request::Worker::WorkerId(wid);
@@ -988,7 +916,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 )
                 .await
                 .inspect_err(|e| {
-                    tracing::warn!("Execute task failed: enqueue job and get output: {:#?}", e)
+                    tracing::warn!("Execute task failed: enqueue job and get output: {:#?}", e);
                 });
 
             // Delete ephemeral worker regardless of job result
@@ -1037,7 +965,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         let name = name.to_owned();
-        let using = using.map(|s| s.to_owned());
+        let using = using.map(std::borrow::ToOwned::to_owned);
         async move {
             let worker = self
                 .create_worker_from_runner(
@@ -1072,7 +1000,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         let runner_name = runner_name.to_owned();
-        let using = using.map(|s| s.to_owned());
+        let using = using.map(std::borrow::ToOwned::to_owned);
         async move {
             let (rid, rdata) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
@@ -1117,7 +1045,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         let runner_name = runner_name.to_owned();
-        let using = using.map(|s| s.to_owned());
+        let using = using.map(std::borrow::ToOwned::to_owned);
         async move {
             let (rid, rdata) = self
                 .find_runner_or_error(cx, metadata.clone(), &runner_name)
@@ -1142,8 +1070,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let runner_settings_bytes = if let Some(ope_desc) = runner_settings_descriptor {
                 tracing::debug!("runner settings schema exists: {:#?}", &runner_settings);
                 runner_settings
-                    .map(|j| JobworkerpProto::json_value_to_message(ope_desc, &j, true, true))
-                    .unwrap_or(Ok(vec![]))
+                    .map_or(Ok(vec![]), |j| {
+                        JobworkerpProto::json_value_to_message(ope_desc, &j, true, true)
+                    })
                     .map_err(|e| {
                         ClientError::ParseError(format!(
                             "Failed to parse runner_settings schema: {e:#?}"
@@ -1356,12 +1285,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
-    /// Enqueue a job with JSON args and return (JobId, Streaming, result_descriptor)
+    /// Enqueue a job with JSON args and return (`JobId`, Streaming, result_descriptor)
     /// for cancellable streaming processing.
     ///
     /// This combines the JSON-to-protobuf args conversion from `enqueue_with_json`
     /// with the streaming enqueue from `enqueue_stream_worker_job`, returning
-    /// the JobId (from response metadata) so callers can cancel via `delete_job`.
+    /// the `JobId` (from response metadata) so callers can cancel via `delete_job`.
     #[allow(clippy::too_many_arguments)]
     fn enqueue_stream_with_json<'a>(
         &'a self,
@@ -1568,9 +1497,7 @@ pub async fn collect_stream_result(
         }
     }
 
-    if !decoded_chunks.is_empty() {
-        Ok(merge_decoded_chunks(decoded_chunks))
-    } else {
+    if decoded_chunks.is_empty() {
         // When descriptor-based decoding failed (has_descriptor=false), the collected bytes
         // are concatenated raw chunks, not a valid single protobuf message.
         let desc = if has_descriptor {
@@ -1579,5 +1506,7 @@ pub async fn collect_stream_result(
             None
         };
         decode_output_to_json(&collected, desc)
+    } else {
+        Ok(merge_decoded_chunks(decoded_chunks))
     }
 }

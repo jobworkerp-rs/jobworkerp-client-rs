@@ -83,6 +83,12 @@ pub enum FunctionSetCommand {
     Count {},
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::missing_panics_doc,
+    clippy::items_after_statements,
+    clippy::similar_names
+)]
 impl FunctionSetCommand {
     pub async fn execute(
         &self,
@@ -90,7 +96,7 @@ impl FunctionSetCommand {
         metadata: &HashMap<String, String>,
     ) {
         match self {
-            FunctionSetCommand::Create {
+            Self::Create {
                 name,
                 description,
                 category,
@@ -111,7 +117,7 @@ impl FunctionSetCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            FunctionSetCommand::Find { id } => {
+            Self::Find { id } => {
                 let id = FunctionSetId { value: *id };
                 let response = client
                     .function_set_client()
@@ -127,7 +133,7 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::FindByName {
+            Self::FindByName {
                 name,
                 format,
                 no_truncate,
@@ -151,7 +157,7 @@ impl FunctionSetCommand {
                     let function_set_json = function_set_to_json(&function_set, format);
                     let function_sets_vec = vec![function_set_json];
 
-                    let options = DisplayOptions::new(format.clone())
+                    let options = DisplayOptions::new(*format)
                         .with_color(supports_color())
                         .with_no_truncate(*no_truncate);
 
@@ -175,7 +181,7 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::List {
+            Self::List {
                 offset,
                 limit,
                 format,
@@ -214,7 +220,7 @@ impl FunctionSetCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -239,7 +245,7 @@ impl FunctionSetCommand {
                     data.trailers().await.unwrap().unwrap_or_default()
                 );
             }
-            FunctionSetCommand::Update {
+            Self::Update {
                 id,
                 name,
                 description,
@@ -256,8 +262,10 @@ impl FunctionSetCommand {
                 let function_set_opt = res.into_inner().data;
                 if let Some(mut function_set) = function_set_opt {
                     if let Some(data) = &mut function_set.data {
-                        data.name = name.clone().unwrap_or(data.name.clone());
-                        data.description = description.clone().unwrap_or(data.description.clone());
+                        data.name = name.clone().unwrap_or_else(|| data.name.clone());
+                        data.description = description
+                            .clone()
+                            .unwrap_or_else(|| data.description.clone());
                         data.category = category.unwrap_or(data.category);
                         if let Some(targets_str) = targets {
                             data.targets = parse_targets(targets_str);
@@ -274,7 +282,7 @@ impl FunctionSetCommand {
                     println!("function set not found");
                 }
             }
-            FunctionSetCommand::Delete { id } => {
+            Self::Delete { id } => {
                 let id = FunctionSetId { value: *id };
                 let response = client
                     .function_set_client()
@@ -284,7 +292,7 @@ impl FunctionSetCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            FunctionSetCommand::Count {} => {
+            Self::Count {} => {
                 let response = client
                     .function_set_client()
                     .await
@@ -350,7 +358,7 @@ fn print_function_set(function_set: FunctionSet) {
                     Some(function_id::Id::WorkerId(wid)) => (wid.value, "WORKER"),
                     None => (0, "UNKNOWN"),
                 };
-            println!("\t\t[{}] id: {}, type: {}", i, id_value, type_str);
+            println!("\t\t[{i}] id: {id_value}, type: {type_str}");
         }
     } else {
         println!("Invalid function set data");

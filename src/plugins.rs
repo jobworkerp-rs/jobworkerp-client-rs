@@ -1,15 +1,16 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-/// Type alias for the collect_stream return type to reduce complexity
+/// Type alias for the `collect_stream` return type to reduce complexity
 pub type CollectStreamFuture = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<(Vec<u8>, HashMap<String, String>)>> + Send>,
 >;
 
-/// Legacy PluginRunner trait (origin/main compatible)
+/// Legacy `PluginRunner` trait (origin/main compatible)
 ///
 /// This trait maintains binary compatibility with plugins compiled against origin/main.
 /// DO NOT modify this trait definition - it will break existing plugin binaries!
+#[allow(clippy::missing_errors_doc)]
 pub trait PluginRunner: Send + Sync {
     fn name(&self) -> String;
     fn description(&self) -> String;
@@ -44,7 +45,7 @@ pub trait PluginRunner: Send + Sync {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("error in settings_schema: {:?}", e);
-                "".to_string()
+                String::new()
             }
         }
     }
@@ -54,7 +55,7 @@ pub trait PluginRunner: Send + Sync {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("error in arguments_schema: {:?}", e);
-                "".to_string()
+                String::new()
             }
         }
     }
@@ -63,10 +64,11 @@ pub trait PluginRunner: Send + Sync {
     }
 }
 
-/// Multi-method PluginRunner trait (new plugins)
+/// Multi-method `PluginRunner` trait (new plugins)
 ///
-/// This trait is for new plugins that support multiple methods via method_proto_map().
+/// This trait is for new plugins that support multiple methods via `method_proto_map()`.
 /// Use this for plugins that need to expose multiple callable methods.
+#[allow(clippy::missing_errors_doc)]
 pub trait MultiMethodPluginRunner: Send + Sync {
     fn name(&self) -> String;
     fn description(&self) -> String;
@@ -112,16 +114,16 @@ pub trait MultiMethodPluginRunner: Send + Sync {
         Err(anyhow::anyhow!("not implemented"))
     }
     /// Cancel the running task.
-    /// Unlike PluginRunner (legacy), this takes &mut self for simpler plugin implementation.
+    /// Unlike `PluginRunner` (legacy), this takes `&mut self` for simpler plugin implementation.
     fn cancel(&mut self) -> bool;
     fn is_canceled(&self) -> bool;
     fn runner_settings_proto(&self) -> String;
 
-    /// Key: method name, Value: MethodSchema (input and output schemas)
+    /// Key: method name, Value: `MethodSchema` (input and output schemas)
     fn method_proto_map(&self) -> HashMap<String, crate::jobworkerp::data::MethodSchema>;
 
     /// Optional: Provide custom JSON schemas
-    /// If None, automatic conversion from method_proto_map() will be used
+    /// If None, automatic conversion from `method_proto_map()` will be used
     fn method_json_schema_map(
         &self,
     ) -> Option<HashMap<String, crate::jobworkerp::data::MethodJsonSchema>> {
@@ -143,7 +145,7 @@ pub trait MultiMethodPluginRunner: Send + Sync {
     }
 
     /// Set up a client stream channel for receiving raw bytes during streaming execution.
-    /// The wrapper layer bridges this to FeedData by spawning an adapter task.
+    /// The wrapper layer bridges this to `FeedData` by spawning an adapter task.
     fn setup_client_stream_channel(
         &mut self,
         _using: Option<&str>,
@@ -200,7 +202,7 @@ macro_rules! schema_to_json_string {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("error in {}: {:?}", $method_name, e);
-                "".to_string()
+                String::new()
             }
         }
     }};

@@ -1,3 +1,4 @@
+#[allow(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod jobworkerp {
     pub mod data {
         tonic::include_proto!("jobworkerp.data");

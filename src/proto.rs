@@ -1,3 +1,10 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::option_if_let_else
+)]
+
 use crate::jobworkerp::data::{JobResultData, MethodProtoMap, Runner, Worker};
 use crate::jobworkerp::service::WorkerNameRequest;
 use crate::{
@@ -11,7 +18,7 @@ use anyhow::{Context, Result};
 use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 
-/// Get MethodSchema from method_proto_map with using parameter
+/// Get `MethodSchema` from `method_proto_map` with using parameter
 ///
 /// # Arguments
 /// * `method_proto_map` - Optional map of method names to schemas
@@ -19,15 +26,14 @@ use prost_reflect::MessageDescriptor;
 ///
 /// # Returns
 /// * `Ok(Some(MethodSchema))` - Method found
-/// * `Ok(None)` - method_proto_map is empty or None
+/// * `Ok(None)` - `method_proto_map` is empty or None
 /// * `Err` - using specified but method not found, or multiple methods without using
 fn get_method_schema<'a>(
-    method_proto_map: &'a Option<MethodProtoMap>,
+    method_proto_map: Option<&'a MethodProtoMap>,
     using: Option<&str>,
 ) -> Result<Option<&'a crate::jobworkerp::data::MethodSchema>> {
-    let map = match method_proto_map {
-        Some(m) => m,
-        None => return Ok(None),
+    let Some(map) = method_proto_map else {
+        return Ok(None);
     };
 
     if map.schemas.is_empty() {
@@ -42,7 +48,7 @@ fn get_method_schema<'a>(
                 method_name,
                 map.schemas
                     .keys()
-                    .map(|k| k.as_str())
+                    .map(String::as_str)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -57,7 +63,7 @@ fn get_method_schema<'a>(
             "Multiple methods available, 'using' required. Available: [{}]",
             map.schemas
                 .keys()
-                .map(|k| k.as_str())
+                .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(", ")
         ))
@@ -145,7 +151,7 @@ impl JobworkerpProto {
         .into_inner()
         .data
         .and_then(|r| r.data.and_then(|r| r.runner_id))
-        .ok_or(anyhow::anyhow!("runner not found: worker: {:?}", &worker))?;
+        .ok_or_else(|| anyhow::anyhow!("runner not found: worker: {:?}", &worker))?;
         Self::find_runner_descriptors(client, runner_id, using).await
     }
     pub fn json_value_to_message(
@@ -186,7 +192,7 @@ impl JobworkerpProto {
         runner_data: &RunnerData,
         using: Option<&str>,
     ) -> Result<Option<MessageDescriptor>> {
-        let method_schema = get_method_schema(&runner_data.method_proto_map, using)?;
+        let method_schema = get_method_schema(runner_data.method_proto_map.as_ref(), using)?;
 
         match method_schema {
             Some(schema) if !schema.args_proto.is_empty() => {
@@ -204,7 +210,7 @@ impl JobworkerpProto {
         runner_data: &RunnerData,
         using: Option<&str>,
     ) -> Result<Option<MessageDescriptor>> {
-        let method_schema = get_method_schema(&runner_data.method_proto_map, using)?;
+        let method_schema = get_method_schema(runner_data.method_proto_map.as_ref(), using)?;
 
         match method_schema {
             Some(schema) if !schema.result_proto.is_empty() => {
@@ -223,7 +229,10 @@ impl JobworkerpProto {
         worker_name: &str,
         using: Option<&str>,
     ) -> Option<MessageDescriptor> {
-        match client
+        if let Some(Worker {
+            id: Some(_wid),
+            data: Some(wdata),
+        }) = client
             .worker_client()
             .await
             .find_by_name(WorkerNameRequest {
@@ -234,48 +243,38 @@ impl JobworkerpProto {
             .into_inner()
             .data
         {
-            Some(Worker {
-                id: Some(_wid),
-                data: Some(wdata),
-            }) => {
-                tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
-                match client
-                    .runner_client()
-                    .await
-                    .find(wdata.runner_id.unwrap())
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .data
-                {
-                    Some(Runner {
-                        id: Some(_sid),
-                        data: Some(sdata),
-                    }) => {
-                        tracing::debug!("runner for worker {} found: {:#?}", worker_name, &sdata);
-                        // Use method_proto_map instead of result_output_proto
-                        match Self::parse_result_schema_descriptor(&sdata, using) {
-                            Ok(Some(descriptor)) => Some(descriptor),
-                            Ok(None) => {
-                                tracing::debug!("no result schema for worker: {}", worker_name);
-                                None
-                            }
-                            Err(e) => {
-                                tracing::warn!("failed to parse result schema: {:#?}", e);
-                                None
-                            }
-                        }
+            tracing::debug!("worker {} found: {:#?}", worker_name, &wdata);
+            if let Some(Runner {
+                id: Some(_sid),
+                data: Some(sdata),
+            }) = client
+                .runner_client()
+                .await
+                .find(wdata.runner_id.unwrap())
+                .await
+                .unwrap()
+                .into_inner()
+                .data
+            {
+                tracing::debug!("runner for worker {} found: {:#?}", worker_name, &sdata);
+                match Self::parse_result_schema_descriptor(&sdata, using) {
+                    Ok(Some(descriptor)) => Some(descriptor),
+                    Ok(None) => {
+                        tracing::debug!("no result schema for worker: {}", worker_name);
+                        None
                     }
-                    _ => {
-                        tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
+                    Err(e) => {
+                        tracing::warn!("failed to parse result schema: {:#?}", e);
                         None
                     }
                 }
-            }
-            _ => {
-                tracing::warn!("worker not found: {:#?}", &worker_name);
+            } else {
+                tracing::warn!("runner not found: {:#?}", &wdata.runner_id);
                 None
             }
+        } else {
+            tracing::warn!("worker not found: {:#?}", &worker_name);
+            None
         }
     }
     pub async fn resolve_result_output_to_json(
@@ -287,7 +286,7 @@ impl JobworkerpProto {
         let output_text: serde_json::Value = match result_data.output.as_ref() {
             Some(output) if !output.items.is_empty() => {
                 let result_proto =
-                    JobworkerpProto::resolve_result_descriptor(client, worker_name, using).await;
+                    Self::resolve_result_descriptor(client, worker_name, using).await;
                 if let Some(proto) = result_proto.as_ref() {
                     let mut output_array = Vec::new();
                     let item = output.items.as_slice();
@@ -314,7 +313,7 @@ impl JobworkerpProto {
                         }
                     }
                     if output_array.is_empty() {
-                        serde_json::Value::String("".to_string())
+                        serde_json::Value::String(String::new())
                     } else if output_array.len() == 1 {
                         output_array[0].clone()
                     } else {
@@ -328,7 +327,7 @@ impl JobworkerpProto {
                     serde_json::Value::Null
                 }
             }
-            Some(_output) => serde_json::Value::String("".to_string()),
+            Some(_output) => serde_json::Value::String(String::new()),
             None => serde_json::Value::Null,
         };
         Ok(output_text)
@@ -342,9 +341,9 @@ impl JobworkerpProto {
         let output_text: String = match result_data.output.as_ref() {
             Some(output) if !output.items.is_empty() => {
                 let result_proto =
-                    JobworkerpProto::resolve_result_descriptor(client, worker_name, using).await;
+                    Self::resolve_result_descriptor(client, worker_name, using).await;
                 if let Some(proto) = result_proto.as_ref() {
-                    let mut output_text = "".to_string();
+                    let mut output_text = String::new();
                     let item = output.items.clone();
                     if !item.is_empty() {
                         tracing::debug!(
@@ -377,11 +376,11 @@ impl JobworkerpProto {
                     String::from_utf8_lossy(&output.items).into_owned()
                 } else {
                     tracing::debug!("empty proto, empty item: worker={}", worker_name);
-                    "".to_string()
+                    String::new()
                 }
             }
             Some(output) => String::from_utf8_lossy(output.items.as_slice()).into_owned(),
-            None => "".to_string(),
+            None => String::new(),
         };
         Ok(output_text)
     }

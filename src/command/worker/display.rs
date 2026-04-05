@@ -9,7 +9,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 use serde_json::Value as JsonValue;
 
-/// Formatter for QueueType enum
+/// Formatter for `QueueType` enum
 pub struct QueueTypeFormatter;
 
 impl EnumFormatter<QueueType> for QueueTypeFormatter {
@@ -32,7 +32,7 @@ impl EnumFormatter<QueueType> for QueueTypeFormatter {
     }
 }
 
-/// Formatter for ResponseType enum
+/// Formatter for `ResponseType` enum
 pub struct ResponseTypeFormatter;
 
 impl EnumFormatter<ResponseType> for ResponseTypeFormatter {
@@ -54,9 +54,10 @@ impl EnumFormatter<ResponseType> for ResponseTypeFormatter {
 }
 
 /// Format boolean values with appropriate decoration
+#[must_use]
 pub fn format_boolean(value: bool, format: &DisplayFormat) -> String {
     match format {
-        DisplayFormat::Table => value.to_string(),
+        DisplayFormat::Table | DisplayFormat::Json => value.to_string(),
         DisplayFormat::Card => {
             if value {
                 "✅ true".to_string()
@@ -64,11 +65,11 @@ pub fn format_boolean(value: bool, format: &DisplayFormat) -> String {
                 "❌ false".to_string()
             }
         }
-        DisplayFormat::Json => value.to_string(),
     }
 }
 
 /// Convert Worker to JSON with format-specific enum decoration
+#[must_use]
 pub fn worker_to_json(
     worker: &Worker,
     settings_descriptor: Option<MessageDescriptor>,

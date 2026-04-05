@@ -3,7 +3,8 @@ use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::jobworkerp::data::StreamingOutputType;
 use serde_json::{Value as JsonValue, json};
 
-/// Convert Function to JSON format for display
+#[allow(clippy::missing_panics_doc, clippy::too_many_lines)]
+#[must_use]
 pub fn function_to_json(
     function: &crate::jobworkerp::function::data::FunctionSpecs,
     format: &DisplayFormat,
@@ -152,7 +153,8 @@ pub fn function_to_json(
     json_obj
 }
 
-/// Convert FunctionResult to JSON format for display
+/// Convert `FunctionResult` to JSON format for display
+#[must_use]
 pub fn function_result_to_json(
     result: &crate::jobworkerp::function::data::FunctionResult,
     format: &DisplayFormat,
@@ -289,7 +291,7 @@ mod tests {
             worker_id: None,
             name: "mcp_server_function".to_string(),
             description: "MCP Server with multiple tools".to_string(),
-            settings_schema: "".to_string(),
+            settings_schema: String::new(),
             methods: Some(MethodSchemaMap { schemas }),
         };
 

@@ -56,10 +56,11 @@ pub enum WorkerInstanceCommand {
     },
 }
 
+#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 impl WorkerInstanceCommand {
     pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
-            WorkerInstanceCommand::Find {
+            Self::Find {
                 id,
                 format,
                 no_truncate,
@@ -78,7 +79,7 @@ impl WorkerInstanceCommand {
                             let json = worker_instance_to_json(&instance, format);
                             let items = vec![json];
 
-                            let options = DisplayOptions::new(format.clone())
+                            let options = DisplayOptions::new(*format)
                                 .with_color(supports_color())
                                 .with_no_truncate(*no_truncate);
 
@@ -99,7 +100,7 @@ impl WorkerInstanceCommand {
 
                             println!("{output}");
                         } else {
-                            println!("Worker instance not found: id = {}", id);
+                            println!("Worker instance not found: id = {id}");
                         }
                     }
                     Err(e) => {
@@ -107,7 +108,7 @@ impl WorkerInstanceCommand {
                     }
                 }
             }
-            WorkerInstanceCommand::List {
+            Self::List {
                 channel,
                 active_only,
                 format,
@@ -138,7 +139,7 @@ impl WorkerInstanceCommand {
                             return;
                         }
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
@@ -164,7 +165,7 @@ impl WorkerInstanceCommand {
                     }
                 }
             }
-            WorkerInstanceCommand::Count {} => {
+            Self::Count {} => {
                 let response = client
                     .worker_instance_client()
                     .await
@@ -182,7 +183,7 @@ impl WorkerInstanceCommand {
                     }
                 }
             }
-            WorkerInstanceCommand::Channels {
+            Self::Channels {
                 format,
                 no_truncate,
             } => {
@@ -206,7 +207,7 @@ impl WorkerInstanceCommand {
                             return;
                         }
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
