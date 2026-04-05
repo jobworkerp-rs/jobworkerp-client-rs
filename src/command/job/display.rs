@@ -1,3 +1,11 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 //! Job-specific display functionality
 //!
 //! This module handles the conversion of Job data structures to JSON format
@@ -10,7 +18,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 use serde_json::Value as JsonValue;
 
-/// Formatter for JobProcessingStatus enum
+/// Formatter for `JobProcessingStatus` enum
 pub struct JobProcessingStatusFormatter;
 
 impl EnumFormatter<JobProcessingStatus> for JobProcessingStatusFormatter {
@@ -61,6 +69,7 @@ impl EnumFormatter<Priority> for PriorityFormatter {
 }
 
 /// Convert Job to JSON with format-specific enum decoration
+#[must_use]
 pub fn job_to_json(
     job: &Job,
     processing_status: Option<JobProcessingStatus>,
@@ -75,7 +84,7 @@ pub fn job_to_json(
         "worker_id": job.data.as_ref().and_then(|d| d.worker_id.as_ref().map(|w| w.value)),
         "run_after": job.data.as_ref().map(|d| {
             if d.run_after_time == 0 {
-                "".to_string()
+                String::new()
             } else {
                 format_timestamp(d.run_after_time)
             }
@@ -111,10 +120,10 @@ fn format_timestamp(timestamp_ms: i64) -> String {
     let timestamp_secs = timestamp_ms / 1000;
     let nanosecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
 
-    match DateTime::from_timestamp(timestamp_secs, nanosecs) {
-        Some(dt) => dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-        None => "Invalid timestamp".to_string(),
-    }
+    DateTime::from_timestamp(timestamp_secs, nanosecs).map_or_else(
+        || "Invalid timestamp".to_string(),
+        |dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -160,7 +169,7 @@ mod tests {
     #[test]
     fn test_format_timestamp() {
         // Test valid timestamp
-        let timestamp = 1642680000000; // 2022-01-20T12:00:00.000Z
+        let timestamp = 1_642_680_000_000; // 2022-01-20T12:00:00.000Z
         let result = format_timestamp(timestamp);
         assert!(result.contains("2022-01-20T12:00:00"));
 
@@ -182,7 +191,7 @@ mod tests {
                 worker_id: None,
                 args: vec![],
                 uniq_key: None,
-                enqueue_time: 1640000000000,
+                enqueue_time: 1_640_000_000_000,
                 grabbed_until_time: None,
                 run_after_time: 0,
                 retried: 0,
@@ -190,6 +199,7 @@ mod tests {
                 timeout: 30000,
                 streaming_type: StreamingType::None as i32,
                 using: None,
+                overrides: None,
             }),
             metadata: HashMap::new(),
         };
@@ -213,14 +223,15 @@ mod tests {
                 worker_id: None,
                 args: vec![],
                 uniq_key: None,
-                enqueue_time: 1640000000000,
+                enqueue_time: 1_640_000_000_000,
                 grabbed_until_time: None,
-                run_after_time: 1642680000000, // 2022-01-20T12:00:00.000Z
+                run_after_time: 1_642_680_000_000, // 2022-01-20T12:00:00.000Z
                 retried: 0,
                 priority: Priority::Medium as i32,
                 timeout: 30000,
                 streaming_type: StreamingType::None as i32,
                 using: None,
+                overrides: None,
             }),
             metadata: HashMap::new(),
         };

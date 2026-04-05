@@ -69,16 +69,17 @@ pub enum RunnerCommand {
     Count {},
 }
 
+#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 impl RunnerCommand {
     pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
-            RunnerCommand::Create {
+            Self::Create {
                 name,
                 description,
                 runner_type,
                 definition,
             } => {
-                let definition = if definition.starts_with("@") {
+                let definition = if definition.starts_with('@') {
                     let path = definition.trim_start_matches('@');
                     std::fs::read_to_string(path).unwrap_or_else(|_| {
                         panic!("Failed to read file: {path}");
@@ -92,7 +93,7 @@ impl RunnerCommand {
                     runner_type: crate::jobworkerp::data::RunnerType::from_str_name(
                         runner_type.as_str(),
                     )
-                    .ok_or("Invalid runner type (MCP_SERVER or PLUGIN)".to_string())
+                    .ok_or_else(|| "Invalid runner type (MCP_SERVER or PLUGIN)".to_string())
                     .unwrap() as i32,
                     definition: definition.clone(),
                 };
@@ -104,7 +105,7 @@ impl RunnerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            RunnerCommand::Find {
+            Self::Find {
                 id,
                 format,
                 no_truncate,
@@ -124,7 +125,7 @@ impl RunnerCommand {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::FindByName {
+            Self::FindByName {
                 name,
                 format,
                 no_truncate,
@@ -144,7 +145,7 @@ impl RunnerCommand {
                     println!("runner not found");
                 }
             }
-            RunnerCommand::List {
+            Self::List {
                 offset,
                 limit,
                 format,
@@ -175,7 +176,7 @@ impl RunnerCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -196,12 +197,12 @@ impl RunnerCommand {
 
                 println!("{output}");
             }
-            RunnerCommand::Delete { id } => {
+            Self::Delete { id } => {
                 let id = RunnerId { value: *id };
                 let response = client.runner_client().await.delete(id).await.unwrap();
                 println!("{response:#?}");
             }
-            RunnerCommand::Count {} => {
+            Self::Count {} => {
                 let request = crate::jobworkerp::service::CountRunnerRequest {
                     runner_types: vec![],
                     name_filter: None,
@@ -225,7 +226,7 @@ impl RunnerCommand {
         let runners = vec![runner_json];
 
         // Display using the appropriate visualizer
-        let options = DisplayOptions::new(format.clone())
+        let options = DisplayOptions::new(*format)
             .with_color(supports_color())
             .with_no_truncate(no_truncate);
 
@@ -249,11 +250,11 @@ impl RunnerCommand {
 
     pub fn print_runner(runner: &Runner) {
         if let Runner {
-            id: Some(_id),
+            id: Some(rid),
             data: Some(data),
         } = runner
         {
-            println!("[runner]:\n\t[id] {}", &_id.value);
+            println!("[runner]:\n\t[id] {}", &rid.value);
             println!("\t[name] {}", &data.name);
             println!("\t[description] {}", &data.description);
             println!("\t[runner_type] {}", &data.runner_type().as_str_name());
@@ -264,9 +265,9 @@ impl RunnerCommand {
             if let Some(method_map) = &data.method_proto_map {
                 println!("\t[methods] {} available", method_map.schemas.len());
                 for (name, schema) in &method_map.schemas {
-                    println!("\t\t[method: {}]", name);
+                    println!("\t\t[method: {name}]");
                     if let Some(desc) = &schema.description {
-                        println!("\t\t\t[description] {}", desc);
+                        println!("\t\t\t[description] {desc}");
                     }
                     println!("\t\t\t[args_proto] |\n{}", &schema.args_proto);
                     println!("\t\t\t[result_proto] |\n{}", &schema.result_proto);

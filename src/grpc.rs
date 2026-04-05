@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 use anyhow::{Context, Result};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
@@ -66,9 +68,10 @@ impl GrpcConnection {
     }
 
     pub async fn reconnect(&self) -> Result<()> {
+        let new_channel = self.endpoint.connect().await?;
         let c = self.channel.clone();
         let mut m = c.write().await;
-        *m = self.endpoint.connect().await?;
+        *m = new_channel;
         Ok(())
     }
 

@@ -1,6 +1,13 @@
-//! JobResult-specific display functionality
+#![allow(
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::option_if_let_else,
+    clippy::cast_precision_loss
+)]
+
+//! `JobResult`-specific display functionality
 //!
-//! This module handles the conversion of JobResult data structures to JSON format
+//! This module handles the conversion of `JobResult` data structures to JSON format
 //! with appropriate enum decoration and streaming output support.
 
 use crate::display::{DisplayFormat, format::EnumFormatter};
@@ -10,7 +17,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
 use serde_json::Value as JsonValue;
 
-/// Formatter for ResultStatus enum
+/// Formatter for `ResultStatus` enum
 pub struct ResultStatusFormatter;
 
 impl EnumFormatter<ResultStatus> for ResultStatusFormatter {
@@ -42,6 +49,7 @@ impl EnumFormatter<ResultStatus> for ResultStatusFormatter {
 }
 
 /// Format timestamp for display
+#[must_use]
 pub fn format_timestamp(timestamp_millis: i64, format: &DisplayFormat) -> String {
     match format {
         DisplayFormat::Json => timestamp_millis.to_string(),
@@ -52,6 +60,7 @@ pub fn format_timestamp(timestamp_millis: i64, format: &DisplayFormat) -> String
 }
 
 /// Calculate and format duration from start and end timestamps
+#[must_use]
 pub fn format_duration(start_millis: i64, end_millis: i64, format: &DisplayFormat) -> String {
     match format {
         DisplayFormat::Json => (end_millis - start_millis).to_string(),
@@ -70,7 +79,8 @@ pub fn format_duration(start_millis: i64, end_millis: i64, format: &DisplayForma
     }
 }
 
-/// Convert JobResult to JSON format with appropriate decoration
+/// Convert `JobResult` to JSON format with appropriate decoration
+#[must_use]
 pub fn job_result_to_json(
     job_result: &JobResult,
     result_descriptor: Option<MessageDescriptor>,
@@ -129,6 +139,7 @@ pub fn job_result_to_json(
 }
 
 /// Convert streaming output data to JSON format
+#[must_use]
 pub fn streaming_output_to_json(
     data: &[u8],
     result_descriptor: Option<MessageDescriptor>,

@@ -1,7 +1,8 @@
 use crate::display::DisplayFormat;
 use serde_json::{Value as JsonValue, json};
 
-/// Convert FunctionSet to JSON format for display
+/// Convert `FunctionSet` to JSON format for display
+#[must_use]
 pub fn function_set_to_json(
     function_set: &crate::jobworkerp::function::data::FunctionSet,
     format: &DisplayFormat,

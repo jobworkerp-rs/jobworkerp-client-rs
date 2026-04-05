@@ -4,44 +4,42 @@ use crate::jobworkerp::service::InstanceChannelInfo;
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 
-fn format_timestamp(millis: i64, format: &DisplayFormat) -> JsonValue {
+fn format_timestamp(millis: i64, format: DisplayFormat) -> JsonValue {
     match format {
         DisplayFormat::Json => serde_json::json!(millis),
-        _ => {
-            let datetime = DateTime::<Utc>::from_timestamp_millis(millis);
-            match datetime {
-                Some(dt) => serde_json::json!(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
-                None => serde_json::json!(millis),
-            }
-        }
+        _ => DateTime::<Utc>::from_timestamp_millis(millis).map_or_else(
+            || serde_json::json!(millis),
+            |dt| serde_json::json!(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+        ),
     }
 }
 
+#[must_use]
 pub fn worker_instance_to_json(instance: &WorkerInstance, format: &DisplayFormat) -> JsonValue {
     let id = instance.id.as_ref().map(|id| id.value);
-    let (ip_address, hostname, channels, registered_at, last_heartbeat) = if let Some(data) =
-        &instance.data
-    {
-        let channels: Vec<JsonValue> = data
-                .channels
-                .iter()
-                .map(|ch| {
-                    serde_json::json!({
-                        "name": if ch.name.is_empty() { "[default]".to_string() } else { ch.name.clone() },
-                        "concurrency": ch.concurrency,
+    let (ip_address, hostname, channels, registered_at, last_heartbeat) =
+        instance.data.as_ref().map_or_else(
+            || (None, None, vec![], None, None),
+            |data| {
+                let channels: Vec<JsonValue> = data
+                    .channels
+                    .iter()
+                    .map(|ch| {
+                        serde_json::json!({
+                            "name": if ch.name.is_empty() { "[default]".to_string() } else { ch.name.clone() },
+                            "concurrency": ch.concurrency,
+                        })
                     })
-                })
-                .collect();
-        (
-            Some(data.ip_address.clone()),
-            data.hostname.clone(),
-            channels,
-            Some(format_timestamp(data.registered_at, format)),
-            Some(format_timestamp(data.last_heartbeat, format)),
-        )
-    } else {
-        (None, None, vec![], None, None)
-    };
+                    .collect();
+                (
+                    Some(data.ip_address.clone()),
+                    data.hostname.clone(),
+                    channels,
+                    Some(format_timestamp(data.registered_at, *format)),
+                    Some(format_timestamp(data.last_heartbeat, *format)),
+                )
+            },
+        );
 
     serde_json::json!({
         "id": id,
@@ -53,6 +51,7 @@ pub fn worker_instance_to_json(instance: &WorkerInstance, format: &DisplayFormat
     })
 }
 
+#[must_use]
 pub fn instance_channel_info_to_json(
     info: &InstanceChannelInfo,
     format: &DisplayFormat,

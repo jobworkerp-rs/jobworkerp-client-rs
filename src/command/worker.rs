@@ -152,6 +152,7 @@ pub enum ResponseTypeArg {
     Direct,
 }
 impl ResponseTypeArg {
+    #[allow(clippy::missing_errors_doc)]
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "NO_RESULT" => Ok(Self::NoResult),
@@ -161,6 +162,11 @@ impl ResponseTypeArg {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::missing_panics_doc,
+    clippy::items_after_statements
+)]
 impl WorkerCommand {
     pub async fn execute(
         &self,
@@ -168,7 +174,7 @@ impl WorkerCommand {
         metadata: &HashMap<String, String>,
     ) {
         match self {
-            WorkerCommand::Create {
+            Self::Create {
                 name,
                 description,
                 runner_id,
@@ -238,7 +244,7 @@ impl WorkerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            WorkerCommand::Find {
+            Self::Find {
                 id,
                 format,
                 no_truncate,
@@ -260,7 +266,7 @@ impl WorkerCommand {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::FindByName {
+            Self::FindByName {
                 name,
                 format,
                 no_truncate,
@@ -282,7 +288,7 @@ impl WorkerCommand {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::List {
+            Self::List {
                 offset,
                 limit,
                 format,
@@ -331,7 +337,7 @@ impl WorkerCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -352,7 +358,7 @@ impl WorkerCommand {
 
                 println!("{output}");
             }
-            WorkerCommand::Update {
+            Self::Update {
                 id,
                 name,
                 description,
@@ -376,27 +382,28 @@ impl WorkerCommand {
                     .unwrap();
                 let worker_opt = res.into_inner().data;
                 if let Some(mut worker_data) = worker_opt.and_then(|w| w.data) {
-                    worker_data.name = name.clone().unwrap_or(worker_data.name);
-                    worker_data.description =
-                        description.clone().unwrap_or(worker_data.description);
+                    worker_data.name = name.clone().unwrap_or_else(|| worker_data.name.clone());
+                    worker_data.description = description
+                        .clone()
+                        .unwrap_or_else(|| worker_data.description.clone());
                     worker_data.runner_id = runner_id
                         .map(|s| RunnerId { value: s })
                         .or(worker_data.runner_id);
-                    worker_data.runner_settings = settings
-                        .clone()
-                        .map(|o| o.bytes().collect())
-                        .unwrap_or(worker_data.runner_settings.clone());
+                    worker_data.runner_settings = settings.clone().map_or_else(
+                        || worker_data.runner_settings.clone(),
+                        |o| o.bytes().collect(),
+                    );
                     worker_data.periodic_interval =
                         periodic.unwrap_or(worker_data.periodic_interval);
-                    worker_data.channel = channel.clone().unwrap_or(worker_data.channel);
+                    worker_data.channel = channel
+                        .clone()
+                        .unwrap_or_else(|| worker_data.channel.clone());
                     worker_data.queue_type = queue_type
                         .clone()
-                        .map(|q| q as i32)
-                        .unwrap_or(worker_data.queue_type);
+                        .map_or(worker_data.queue_type, |q| q as i32);
                     worker_data.response_type = response_type
                         .clone()
-                        .map(|r| r as i32)
-                        .unwrap_or(worker_data.response_type);
+                        .map_or(worker_data.response_type, |r| r as i32);
                     worker_data.store_success = store_success.unwrap_or(worker_data.store_success);
                     worker_data.store_failure = store_failure.unwrap_or(worker_data.store_failure);
                     worker_data.use_static = use_static.unwrap_or(worker_data.use_static);
@@ -423,7 +430,7 @@ impl WorkerCommand {
                     println!("worker not found");
                 }
             }
-            WorkerCommand::Delete { id } => {
+            Self::Delete { id } => {
                 let id = WorkerId { value: *id };
                 let response = client
                     .worker_client()
@@ -433,7 +440,7 @@ impl WorkerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            WorkerCommand::Count {} => {
+            Self::Count {} => {
                 let request = CountWorkerRequest {
                     runner_types: vec![],
                     channel: None,
@@ -474,7 +481,7 @@ impl WorkerCommand {
             let workers = vec![worker_json];
 
             // Display using the appropriate visualizer
-            let options = DisplayOptions::new(format.clone())
+            let options = DisplayOptions::new(*format)
                 .with_color(supports_color())
                 .with_no_truncate(no_truncate);
 
