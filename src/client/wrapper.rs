@@ -1,3 +1,11 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::option_if_let_else,
+    clippy::missing_const_for_fn
+)]
+
 use super::helper::UseJobworkerpClientHelper;
 use crate::{
     client::{JobworkerpClient, UseJobworkerpClient},
@@ -25,31 +33,30 @@ impl Tracing for JobworkerpClientWrapper {}
 
 impl JobworkerpClientWrapper {
     const DEFAULT_REQUEST_TIMEOUT_SEC: u32 = 1200;
-    pub async fn new(
-        address: &str,
-        request_timeout_sec: Option<u32>,
-    ) -> Result<JobworkerpClientWrapper> {
+    pub async fn new(address: &str, request_timeout_sec: Option<u32>) -> Result<Self> {
         let jobworkerp_client = JobworkerpClient::new(
             address.to_string(),
             request_timeout_sec.map(|s| Duration::from_secs(s.into())),
         )
         .await?;
 
-        Ok(JobworkerpClientWrapper { jobworkerp_client })
+        Ok(Self { jobworkerp_client })
     }
-    pub async fn new_by_env(request_timeout_sec: Option<u32>) -> Result<JobworkerpClientWrapper> {
+    pub async fn new_by_env(request_timeout_sec: Option<u32>) -> Result<Self> {
         let jobworkerp_client = JobworkerpClient::new(
             std::env::var("JOBWORKERP_ADDR").expect("JOBWORKERP_ADDR is not set"),
             request_timeout_sec.map(|s| Duration::from_secs(s.into())),
         )
         .await?;
 
-        Ok(JobworkerpClientWrapper { jobworkerp_client })
+        Ok(Self { jobworkerp_client })
     }
+    #[must_use]
     pub fn address(&self) -> &str {
         self.jobworkerp_client.address.as_str()
     }
-    pub fn request_timeout(&self) -> Option<Duration> {
+    #[must_use]
+    pub const fn request_timeout(&self) -> Option<Duration> {
         self.jobworkerp_client.request_timeout
     }
     pub async fn execute_workflow(
@@ -97,8 +104,9 @@ impl JobworkerpClientWrapper {
                     Some(worker_params),
                     job_args,
                     self.request_timeout()
-                        .map(|t| t.as_secs() as u32)
-                        .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC),
+                        .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| {
+                            u32::try_from(t.as_secs()).unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC)
+                        }),
                     using,
                 )
                 .await?;
@@ -132,7 +140,7 @@ impl JobworkerpClientWrapper {
     }
 
     /// Execute any pre-registered worker by name with JSON arguments.
-    /// Resolves WorkerData at runtime via worker_name (not worker_id, which is unstable).
+    /// Resolves `WorkerData` at runtime via `worker_name` (not `worker_id`, which is unstable).
     pub async fn execute_worker_by_name(
         &self,
         worker_name: &str,
@@ -144,8 +152,7 @@ impl JobworkerpClientWrapper {
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Worker not found: worker_name='{}' on jobworkerp server",
-                    worker_name
+                    "Worker not found: worker_name='{worker_name}' on jobworkerp server"
                 )
             })?;
 
@@ -155,8 +162,9 @@ impl JobworkerpClientWrapper {
             &worker_data,
             args_json,
             self.request_timeout()
-                .map(|t| t.as_secs() as u32)
-                .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC),
+                .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| {
+                    u32::try_from(t.as_secs()).unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC)
+                }),
             using,
         )
         .await

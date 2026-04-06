@@ -8,7 +8,7 @@ use crate::display::format::{EnumFormatter, StreamingOutputTypeFormatter};
 use crate::jobworkerp::data::{Runner, RunnerType};
 use serde_json::Value as JsonValue;
 
-/// Formatter for RunnerType enum
+/// Formatter for `RunnerType` enum
 pub struct RunnerTypeFormatter;
 
 impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
@@ -23,13 +23,8 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::SlackPostMessage => "SLACK_POST_MESSAGE",
                 RunnerType::PythonCommand => "PYTHON_COMMAND",
                 RunnerType::McpServer => "MCP_SERVER",
-                RunnerType::LlmChat => "LLM_CHAT",
-                RunnerType::LlmCompletion => "LLM_COMPLETION",
                 RunnerType::Llm => "LLM",
                 RunnerType::Workflow => "WORKFLOW",
-                RunnerType::InlineWorkflow => "INLINE_WORKFLOW",
-                RunnerType::ReusableWorkflow => "REUSABLE_WORKFLOW",
-                RunnerType::CreateWorkflow => "CREATE_WORKFLOW",
                 RunnerType::FunctionSetSelector => "FUNCTION_SET_SELECTOR",
                 RunnerType::Grpc => "GRPC",
             }
@@ -43,13 +38,8 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::SlackPostMessage => "💬 SLACK_POST_MESSAGE",
                 RunnerType::PythonCommand => "🐍 PYTHON_COMMAND",
                 RunnerType::McpServer => "🔧 MCP_SERVER",
-                RunnerType::LlmChat => "🤖 LLM_CHAT",
-                RunnerType::LlmCompletion => "📝 LLM_COMPLETION",
                 RunnerType::Llm => "🤖 LLM",
                 RunnerType::Workflow => "🔄 WORKFLOW",
-                RunnerType::InlineWorkflow => "🔄 INLINE_WORKFLOW",
-                RunnerType::ReusableWorkflow => "🔄 REUSABLE_WORKFLOW",
-                RunnerType::CreateWorkflow => "🔄 CREATE_WORKFLOW",
                 RunnerType::FunctionSetSelector => "🔍 FUNCTION_SET_SELECTOR",
                 RunnerType::Grpc => "🔗 GRPC",
             }
@@ -60,11 +50,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
 }
 
 /// Truncate proto definition for display
-fn truncate_proto_definition(
-    definition: &str,
-    format: &DisplayFormat,
-    no_truncate: bool,
-) -> String {
+fn truncate_proto_definition(definition: &str, format: DisplayFormat, no_truncate: bool) -> String {
     match format {
         DisplayFormat::Json => definition.to_string(),
         _ => {
@@ -88,6 +74,8 @@ fn truncate_proto_definition(
 }
 
 /// Convert Runner to JSON with format-specific enum decoration
+#[allow(clippy::missing_panics_doc)]
+#[must_use]
 pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool) -> JsonValue {
     let runner_type_formatter = RunnerTypeFormatter;
     let output_type_formatter = StreamingOutputTypeFormatter;
@@ -107,14 +95,14 @@ pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool
         // Format proto definition with truncation
         runner_json["definition"] = serde_json::json!(truncate_proto_definition(
             &data.definition,
-            format,
+            *format,
             no_truncate
         ));
 
         // Add runner_settings_proto
         runner_json["runner_settings_proto"] = serde_json::json!(truncate_proto_definition(
             &data.runner_settings_proto,
-            format,
+            *format,
             no_truncate
         ));
 
@@ -131,8 +119,8 @@ pub fn runner_to_json(runner: &Runner, format: &DisplayFormat, no_truncate: bool
                         method_details.insert(
                             name.clone(),
                             serde_json::json!({
-                                "args_proto": truncate_proto_definition(&schema.args_proto, format, no_truncate),
-                                "result_proto": truncate_proto_definition(&schema.result_proto, format, no_truncate),
+                                "args_proto": truncate_proto_definition(&schema.args_proto, *format, no_truncate),
+                                "result_proto": truncate_proto_definition(&schema.result_proto, *format, no_truncate),
                                 "description": schema.description,
                                 "output_type": output_type_formatter.format(schema.output_type(), format),
                             }),
@@ -185,8 +173,8 @@ mod tests {
 
         // Test JSON format
         assert_eq!(
-            formatter.format(RunnerType::InlineWorkflow, &DisplayFormat::Json),
-            "INLINE_WORKFLOW"
+            formatter.format(RunnerType::Workflow, &DisplayFormat::Json),
+            "WORKFLOW"
         );
 
         // Test Grpc variant (multi-method GRPC runner)
@@ -234,16 +222,16 @@ mod tests {
         let long_definition = "syntax = \"proto3\";\n\npackage test;\n\nmessage TestMessage {\n  string field1 = 1;\n  int32 field2 = 2;\n  bool field3 = 3;\n}";
 
         // Test table format with truncation
-        let result = truncate_proto_definition(long_definition, &DisplayFormat::Table, false);
+        let result = truncate_proto_definition(long_definition, DisplayFormat::Table, false);
         assert!(result.len() <= 50);
         assert!(result.ends_with("..."));
 
         // Test no truncate
-        let result = truncate_proto_definition(long_definition, &DisplayFormat::Table, true);
+        let result = truncate_proto_definition(long_definition, DisplayFormat::Table, true);
         assert_eq!(result, long_definition);
 
         // Test JSON format (no truncation)
-        let result = truncate_proto_definition(long_definition, &DisplayFormat::Json, false);
+        let result = truncate_proto_definition(long_definition, DisplayFormat::Json, false);
         assert_eq!(result, long_definition);
     }
 }

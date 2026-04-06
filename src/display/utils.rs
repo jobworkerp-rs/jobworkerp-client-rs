@@ -3,9 +3,12 @@
 //! This module provides helper functions for string manipulation,
 //! JSON hierarchy formatting, and other display-related utilities.
 
+use std::fmt::Write;
+
 use serde_json::Value as JsonValue;
 
 /// Truncate a string to specified length with ellipsis
+#[must_use]
 pub fn truncate_string(text: &str, max_length: Option<usize>) -> String {
     match max_length {
         Some(max_len) if text.len() > max_len => {
@@ -25,6 +28,7 @@ pub fn truncate_string(text: &str, max_length: Option<usize>) -> String {
 }
 
 /// Format JSON value for hierarchical display with indentation
+#[must_use]
 pub fn format_json_hierarchy(
     value: &JsonValue,
     indent_level: usize,
@@ -49,13 +53,13 @@ pub fn format_json_hierarchy(
             let mut result = "[\n".to_string();
             for (i, item) in arr.iter().enumerate() {
                 let formatted_item = format_json_hierarchy(item, child_indent, max_field_length);
-                result.push_str(&format!("{indent}  {formatted_item}"));
+                let _ = write!(result, "{indent}  {formatted_item}");
                 if i < arr.len() - 1 {
                     result.push(',');
                 }
                 result.push('\n');
             }
-            result.push_str(&format!("{indent}]"));
+            let _ = write!(result, "{indent}]");
             result
         }
         JsonValue::Object(obj) => {
@@ -67,19 +71,20 @@ pub fn format_json_hierarchy(
             let entries: Vec<_> = obj.iter().collect();
             for (i, (key, value)) in entries.iter().enumerate() {
                 let formatted_value = format_json_hierarchy(value, child_indent, max_field_length);
-                result.push_str(&format!("{indent}  \"{key}\": {formatted_value}"));
+                let _ = write!(result, "{indent}  \"{key}\": {formatted_value}");
                 if i < entries.len() - 1 {
                     result.push(',');
                 }
                 result.push('\n');
             }
-            result.push_str(&format!("{indent}}}"));
+            let _ = write!(result, "{indent}}}");
             result
         }
     }
 }
 
-/// Convert JsonValue to a flat key-value representation for table display
+/// Convert `JsonValue` to a flat key-value representation for table display
+#[must_use]
 pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, String)> {
     let mut result = Vec::new();
 
@@ -123,7 +128,8 @@ pub fn flatten_json_for_table(value: &JsonValue, prefix: &str) -> Vec<(String, S
     result
 }
 
-/// Convert JsonValue to display string
+/// Convert `JsonValue` to display string
+#[must_use]
 pub fn json_value_to_string(value: &JsonValue) -> String {
     match value {
         JsonValue::Null => "null".to_string(),
@@ -138,10 +144,11 @@ pub fn json_value_to_string(value: &JsonValue) -> String {
 }
 
 /// Check if terminal output supports colors
+#[must_use]
 pub fn supports_color() -> bool {
     // Check if output is to a TTY and color environment variables
     atty::is(atty::Stream::Stdout)
-        && (std::env::var("NO_COLOR").is_err() || std::env::var("NO_COLOR") == Ok("".to_string()))
+        && std::env::var_os("NO_COLOR").is_none()
         && std::env::var("TERM")
             .map(|term| term != "dumb")
             .unwrap_or(true)
@@ -209,8 +216,8 @@ mod tests {
         let formatted = format_json_hierarchy(&json_obj, 0, Some(50));
         assert!(formatted.contains("\"key\": \"value\""));
         assert!(formatted.contains("\"number\": 42"));
-        assert!(formatted.starts_with("{"));
-        assert!(formatted.ends_with("}"));
+        assert!(formatted.starts_with('{'));
+        assert!(formatted.ends_with('}'));
     }
 
     #[test]

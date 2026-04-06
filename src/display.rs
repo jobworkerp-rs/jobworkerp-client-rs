@@ -42,11 +42,12 @@ impl Default for DisplayOptions {
 }
 
 impl DisplayOptions {
-    /// Create new DisplayOptions with specified format
+    /// Create new `DisplayOptions` with specified format
     /// JSON format automatically disables colors for clean output
+    #[must_use]
     pub fn new(format: DisplayFormat) -> Self {
         Self {
-            format: format.clone(),
+            format,
             color_enabled: match format {
                 DisplayFormat::Json => false, // Always disable colors for JSON
                 _ => true,                    // Default enabled for other formats
@@ -57,7 +58,8 @@ impl DisplayOptions {
 
     /// Set color enabled/disabled
     /// Note: JSON format automatically disables colors regardless of this setting
-    pub fn with_color(mut self, enabled: bool) -> Self {
+    #[must_use]
+    pub const fn with_color(mut self, enabled: bool) -> Self {
         self.color_enabled = match self.format {
             DisplayFormat::Json => false, // Always disable colors for JSON
             _ => enabled,                 // Use the provided setting for other formats
@@ -65,14 +67,16 @@ impl DisplayOptions {
         self
     }
 
-    /// Set no_truncate option
-    pub fn with_no_truncate(mut self, no_truncate: bool) -> Self {
+    /// Set `no_truncate` option
+    #[must_use]
+    pub const fn with_no_truncate(mut self, no_truncate: bool) -> Self {
         self.no_truncate = no_truncate;
         self
     }
 
-    /// Get effective max field length considering no_truncate option
-    pub fn effective_max_length(&self) -> Option<usize> {
+    /// Get effective max field length considering `no_truncate` option
+    #[must_use]
+    pub const fn effective_max_length(&self) -> Option<usize> {
         if self.no_truncate {
             None
         } else {

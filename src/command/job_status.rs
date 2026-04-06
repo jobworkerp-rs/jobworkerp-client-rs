@@ -1,3 +1,18 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::module_name_repetitions,
+    clippy::items_after_statements,
+    clippy::similar_names,
+    clippy::option_if_let_else,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 // as job-status: valid commands are find, list, search, cleanup
 // -i, --id <id> id of the job (for find)
 // --status <status> status filter (for search)
@@ -44,13 +59,14 @@ pub enum JobProcessingStatusArg {
 }
 
 impl JobProcessingStatusArg {
-    pub fn to_grpc(&self) -> JobProcessingStatus {
+    #[must_use]
+    pub const fn to_grpc(&self) -> JobProcessingStatus {
         match self {
-            JobProcessingStatusArg::Unknown => JobProcessingStatus::Unknown,
-            JobProcessingStatusArg::Pending => JobProcessingStatus::Pending,
-            JobProcessingStatusArg::Running => JobProcessingStatus::Running,
-            JobProcessingStatusArg::WaitResult => JobProcessingStatus::WaitResult,
-            JobProcessingStatusArg::Cancelling => JobProcessingStatus::Cancelling,
+            Self::Unknown => JobProcessingStatus::Unknown,
+            Self::Pending => JobProcessingStatus::Pending,
+            Self::Running => JobProcessingStatus::Running,
+            Self::WaitResult => JobProcessingStatus::WaitResult,
+            Self::Cancelling => JobProcessingStatus::Cancelling,
         }
     }
 }
@@ -71,7 +87,7 @@ pub enum JobStatusCommand {
         #[clap(long)]
         no_truncate: bool,
     },
-    /// Search job processing statuses with conditions (requires JOB_STATUS_RDB_INDEXING=true)
+    /// Search job processing statuses with conditions (requires `JOB_STATUS_RDB_INDEXING=true`)
     Search {
         #[clap(
             short,
@@ -104,7 +120,7 @@ pub enum JobStatusCommand {
         #[clap(long)]
         no_truncate: bool,
     },
-    /// Cleanup old deleted records (requires JOB_STATUS_RDB_INDEXING=true)
+    /// Cleanup old deleted records (requires `JOB_STATUS_RDB_INDEXING=true`)
     Cleanup {
         #[clap(
             short,
@@ -118,7 +134,7 @@ pub enum JobStatusCommand {
 impl JobStatusCommand {
     pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
-            JobStatusCommand::Find { id, format } => {
+            Self::Find { id, format } => {
                 let job_id = JobId { value: *id };
                 let response = client
                     .job_processing_status_client()
@@ -130,17 +146,16 @@ impl JobStatusCommand {
                     Ok(resp) => {
                         let inner = resp.into_inner();
                         if let Some(status) = inner.status {
+                            use crate::display::format::EnumFormatter;
                             let status_enum = JobProcessingStatus::try_from(status)
                                 .unwrap_or(JobProcessingStatus::Unknown);
                             let status_formatter = display::JobProcessingStatusFormatter;
-                            use crate::display::format::EnumFormatter;
                             println!(
-                                "Job ID: {}, Status: {}",
-                                id,
+                                "Job ID: {id}, Status: {}",
                                 status_formatter.format(status_enum, format)
                             );
                         } else {
-                            println!("Job ID {} not found or no status available", id);
+                            println!("Job ID {id} not found or no status available");
                         }
                     }
                     Err(e) => {
@@ -148,7 +163,7 @@ impl JobStatusCommand {
                     }
                 }
             }
-            JobStatusCommand::List {
+            Self::List {
                 format,
                 no_truncate,
             } => {
@@ -174,7 +189,7 @@ impl JobStatusCommand {
                             return;
                         }
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
@@ -200,7 +215,7 @@ impl JobStatusCommand {
                     }
                 }
             }
-            JobStatusCommand::Search {
+            Self::Search {
                 status,
                 worker_id,
                 channel,
@@ -243,7 +258,7 @@ impl JobStatusCommand {
                             return;
                         }
 
-                        let options = DisplayOptions::new(format.clone())
+                        let options = DisplayOptions::new(*format)
                             .with_color(supports_color())
                             .with_no_truncate(*no_truncate);
 
@@ -274,7 +289,7 @@ impl JobStatusCommand {
                     }
                 }
             }
-            JobStatusCommand::Cleanup { retention_hours } => {
+            Self::Cleanup { retention_hours } => {
                 let request = CleanupRequest {
                     retention_hours_override: *retention_hours,
                 };

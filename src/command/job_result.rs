@@ -1,3 +1,18 @@
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::module_name_repetitions,
+    clippy::items_after_statements,
+    clippy::similar_names,
+    clippy::option_if_let_else,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -107,7 +122,7 @@ impl JobResultCommand {
         metadata: &HashMap<String, String>,
     ) {
         match self {
-            JobResultCommand::Find {
+            Self::Find {
                 id,
                 format,
                 no_truncate,
@@ -129,7 +144,7 @@ impl JobResultCommand {
                     }
                 }
             }
-            JobResultCommand::Listen {
+            Self::Listen {
                 job_id,
                 worker,
                 timeout,
@@ -152,7 +167,7 @@ impl JobResultCommand {
                     .into_inner();
                 Self::print_job_result_formatted(client, response, format, *no_truncate).await;
             }
-            JobResultCommand::ListenStream {
+            Self::ListenStream {
                 job_id,
                 worker,
                 timeout,
@@ -188,7 +203,7 @@ impl JobResultCommand {
 
                 // Create display options
                 let display_options = crate::display::DisplayOptions {
-                    format: format.clone(),
+                    format: *format,
                     color_enabled: true,
                     max_field_length: None,
                     use_unicode: true,
@@ -196,16 +211,16 @@ impl JobResultCommand {
                 };
 
                 // result meta header
-                JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
+                Self::print_job_result_metadata(&meta, result_desc.clone());
 
                 // Start streaming session
-                JobResultCommand::start_streaming_session("job result", format, &display_options);
+                Self::start_streaming_session("job result", format, &display_options);
 
                 // print streaming response with improved formatting
                 let mut item_count = 0;
                 while let Some(item) = response.message().await.unwrap() {
                     if let Some(jobworkerp::data::result_output_item::Item::Data(v)) = item.item {
-                        JobResultCommand::print_streaming_output(
+                        Self::print_streaming_output(
                             v.as_slice(),
                             result_desc.clone(),
                             format,
@@ -217,10 +232,10 @@ impl JobResultCommand {
                 }
 
                 // End streaming session
-                JobResultCommand::end_streaming_session(item_count, format, &display_options);
+                Self::end_streaming_session(item_count, format, &display_options);
                 // Self::print_job_result_with_request(client, response).await;
             }
-            JobResultCommand::ListenByWorker {
+            Self::ListenByWorker {
                 worker,
                 format,
                 no_truncate,
@@ -240,7 +255,7 @@ impl JobResultCommand {
                     Self::print_job_result_formatted(client, res, format, *no_truncate).await;
                 }
             }
-            JobResultCommand::List {
+            Self::List {
                 offset,
                 limit,
                 format,
@@ -277,11 +292,7 @@ impl JobResultCommand {
                 // Collect all job results into a vector for batch processing
                 let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    let worker_name = job_res
-                        .data
-                        .as_ref()
-                        .map(|d| d.worker_name.as_str())
-                        .unwrap_or("");
+                    let worker_name = job_res.data.as_ref().map_or("", |d| d.worker_name.as_str());
                     let result_proto =
                         JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
@@ -289,7 +300,7 @@ impl JobResultCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -310,7 +321,7 @@ impl JobResultCommand {
 
                 println!("{output}");
             }
-            JobResultCommand::ListByJobId {
+            Self::ListByJobId {
                 job_id,
                 format,
                 no_truncate,
@@ -335,11 +346,7 @@ impl JobResultCommand {
                 // Collect all job results into a vector for batch processing
                 let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    let worker_name = job_res
-                        .data
-                        .as_ref()
-                        .map(|d| d.worker_name.as_str())
-                        .unwrap_or("");
+                    let worker_name = job_res.data.as_ref().map_or("", |d| d.worker_name.as_str());
                     let result_proto =
                         JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
@@ -347,7 +354,7 @@ impl JobResultCommand {
                 }
 
                 // Display using the appropriate visualizer
-                let options = DisplayOptions::new(format.clone())
+                let options = DisplayOptions::new(*format)
                     .with_color(supports_color())
                     .with_no_truncate(*no_truncate);
 
@@ -368,7 +375,7 @@ impl JobResultCommand {
 
                 println!("{output}");
             }
-            JobResultCommand::Delete { id } => {
+            Self::Delete { id } => {
                 let id = JobResultId { value: *id };
                 let response = client
                     .job_result_client()
@@ -378,7 +385,7 @@ impl JobResultCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
-            JobResultCommand::Count {} => {
+            Self::Count {} => {
                 let request = CountJobResultRequest {
                     worker_ids: vec![],
                     statuses: vec![],
@@ -415,8 +422,7 @@ impl JobResultCommand {
         let worker_name = job_result
             .data
             .as_ref()
-            .map(|d| d.worker_name.as_str())
-            .unwrap_or("");
+            .map_or("", |d| d.worker_name.as_str());
         let result_proto =
             JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
 
@@ -425,7 +431,7 @@ impl JobResultCommand {
         let job_results = vec![job_result_json];
 
         // Display using the appropriate visualizer
-        let options = DisplayOptions::new(format.clone())
+        let options = DisplayOptions::new(*format)
             .with_color(supports_color())
             .with_no_truncate(no_truncate);
 
@@ -471,7 +477,7 @@ impl JobResultCommand {
                 KeyAndValueRef::Ascii(_key, _value) => {
                     // println!("Ascii: {:?}: {:?}", key, value)
                 }
-                KeyAndValueRef::Binary(ref key, ref value) => {
+                KeyAndValueRef::Binary(key, value) => {
                     if key.as_str() == Self::RESULT_HEADER_NAME {
                         match value.to_bytes() {
                             Ok(bytes) => match JobResult::decode(bytes.as_ref()) {

@@ -3,6 +3,8 @@
 //! This module provides concrete implementations of visualizers for table,
 //! card, and JSON output formats.
 
+use std::fmt::Write;
+
 use crate::display::utils::{format_json_hierarchy, truncate_string};
 use crate::display::{DisplayOptions, format::color};
 use comfy_table::{Attribute, Cell, ColumnConstraint, ContentArrangement, Table, Width};
@@ -124,7 +126,7 @@ impl JsonVisualizer for CardVisualizer {
 
         for (index, json_obj) in data.iter().enumerate() {
             if index > 0 {
-                result.push_str(&format!("\n{}\n", separator.repeat(50)));
+                let _ = write!(result, "\n{}\n", separator.repeat(50));
             }
 
             // Card header
@@ -142,7 +144,7 @@ impl JsonVisualizer for CardVisualizer {
             // Add bullets to each line
             for line in formatted.lines() {
                 if !line.trim().is_empty() {
-                    result.push_str(&format!("{bullet}{line}\n"));
+                    let _ = writeln!(result, "{bullet}{line}");
                 }
             }
         }
@@ -171,16 +173,11 @@ impl JsonVisualizer for JsonPrettyVisualizer {
 
         if data.len() == 1 {
             // Single object - don't wrap in array
-            match serde_json::to_string_pretty(&data[0]) {
-                Ok(json) => json,
-                Err(_) => "Invalid JSON".to_string(),
-            }
+            serde_json::to_string_pretty(&data[0]).unwrap_or_else(|_| "Invalid JSON".to_string())
         } else {
             // Multiple objects - return as JSON array
-            match serde_json::to_string_pretty(&JsonValue::Array(data.to_vec())) {
-                Ok(json) => json,
-                Err(_) => "Invalid JSON".to_string(),
-            }
+            serde_json::to_string_pretty(&JsonValue::Array(data.to_vec()))
+                .unwrap_or_else(|_| "Invalid JSON".to_string())
         }
     }
 }
@@ -505,10 +502,10 @@ fn format_cell_value_for_comfy_table(value: &JsonValue, options: &DisplayOptions
     };
 
     // Apply truncation if needed (no external color codes)
-    if !options.no_truncate {
-        truncate_string(&text, options.effective_max_length())
-    } else {
+    if options.no_truncate {
         text
+    } else {
+        truncate_string(&text, options.effective_max_length())
     }
 }
 
@@ -540,7 +537,7 @@ fn apply_cell_color(cell: Cell, value: &JsonValue) -> Cell {
     }
 }
 
-/// StreamingTableVisualizer implementation
+/// `StreamingTableVisualizer` implementation
 impl Default for StreamingTableVisualizer {
     fn default() -> Self {
         Self::new()
@@ -548,7 +545,8 @@ impl Default for StreamingTableVisualizer {
 }
 
 impl StreamingTableVisualizer {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -592,7 +590,7 @@ impl StreamingVisualizer for StreamingTableVisualizer {
     }
 }
 
-/// StreamingCardVisualizer implementation
+/// `StreamingCardVisualizer` implementation
 impl StreamingVisualizer for StreamingCardVisualizer {
     fn start_stream(&self, stream_type: &str, options: &DisplayOptions) {
         let start_msg = format!("🔄 Streaming {stream_type} results...");
@@ -603,6 +601,7 @@ impl StreamingVisualizer for StreamingCardVisualizer {
         }
     }
 
+    #[allow(clippy::similar_names)]
     fn render_item(&self, item: &JsonValue, index: usize, options: &DisplayOptions) {
         let border = if options.use_unicode { "─" } else { "-" };
         let corner_tl = if options.use_unicode { "╭" } else { "+" };
@@ -660,7 +659,7 @@ impl StreamingVisualizer for StreamingCardVisualizer {
     }
 }
 
-/// StreamingJsonVisualizer implementation
+/// `StreamingJsonVisualizer` implementation
 impl StreamingVisualizer for StreamingJsonVisualizer {
     fn start_stream(&self, _stream_type: &str, _options: &DisplayOptions) {
         // JSON streaming doesn't need a start message
