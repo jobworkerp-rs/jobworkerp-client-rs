@@ -364,24 +364,25 @@ impl JobCommand {
                             );
                             item_count += 1;
                         }
-                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
+                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
                             // Only display if no Data chunks were output yet
-                            if item_count == 0 {
-                                JobResultCommand::print_streaming_output(
-                                    v.as_slice(),
-                                    result_desc.clone(),
-                                    format,
-                                    &display_options,
-                                    item_count,
-                                );
-                                item_count += 1;
-                            }
+                            if item_count == 0 =>
+                        {
+                            JobResultCommand::print_streaming_output(
+                                v.as_slice(),
+                                result_desc.clone(),
+                                format,
+                                &display_options,
+                                item_count,
+                            );
+                            item_count += 1;
                         }
                         Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                             break;
                         }
-                        None => {
-                            // Skip empty items
+                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
+                        | None => {
+                            // Skip: FinalCollected after Data chunks already output, or empty items
                         }
                     }
                 }
@@ -545,24 +546,25 @@ impl JobCommand {
                                 );
                                 item_count += 1;
                             }
-                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(v)) => {
+                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
                                 // Only display if no Data chunks were output yet
-                                if item_count == 0 {
-                                    JobResultCommand::print_streaming_output(
-                                        v.as_slice(),
-                                        result_desc.clone(),
-                                        format,
-                                        &display_options,
-                                        item_count,
-                                    );
-                                    item_count += 1;
-                                }
+                                if item_count == 0 =>
+                            {
+                                JobResultCommand::print_streaming_output(
+                                    v.as_slice(),
+                                    result_desc.clone(),
+                                    format,
+                                    &display_options,
+                                    item_count,
+                                );
+                                item_count += 1;
                             }
                             Some(jobworkerp::data::result_output_item::Item::End(_)) => {
                                 break;
                             }
-                            None => {
-                                // Skip empty items
+                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
+                            | None => {
+                                // Skip: FinalCollected after Data chunks already output, or empty items
                             }
                         }
                     }
