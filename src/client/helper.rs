@@ -555,7 +555,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         runner_name: &'a str,
         worker_data: WorkerData,
-        settings_json: &'a serde_json::Value,
+        settings_json: Option<&'a serde_json::Value>,
     ) -> impl std::future::Future<Output = Result<WorkerId>> + Send + 'a
     where
         Self: Sized,

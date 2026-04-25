@@ -1,12 +1,13 @@
 //! YAML-driven worker registration for jobworkerp.
 //!
 //! Loads N worker definitions from a single YAML file, expands `${VAR:-default}`
-//! environment-variable interpolation and `$file: <path>` includes (relative
-//! to the YAML file's directory), then upserts each `WorkerData` to the
-//! jobworkerp server via [`UseJobworkerpClientHelper::upsert_worker`].
+//! environment-variable interpolation and `$file: <path>` includes (constrained
+//! to `base_dir`), then upserts each `WorkerData` to the jobworkerp server via
+//! [`UseJobworkerpClientHelper::upsert_worker`].
 //!
-//! The YAML schema mirrors `jobworkerp.data.WorkerData`. See
-//! `memories/docs/yaml-workers.md` for the user-facing reference.
+//! See `docs/worker-yaml.md` (in this crate) for the full user-facing
+//! reference, including schema, security model around `$file`, and error
+//! semantics.
 
 #![allow(clippy::missing_errors_doc, clippy::doc_markdown)]
 
@@ -26,6 +27,7 @@ use std::sync::Arc;
 
 /// Top-level YAML document.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkersYaml {
     #[serde(default)]
     pub defaults: WorkerDefaults,
@@ -57,8 +59,11 @@ pub struct WorkerSpec {
     pub description: Option<String>,
     /// Free-form YAML matching the runner's `runner_settings` proto schema.
     /// Converted to JSON, then to proto bytes via `JobworkerpProto`.
+    /// Omitting (or writing `settings: ~`) sends empty bytes, matching the
+    /// `helper.rs::setup_worker_and_enqueue_with_json` semantics where a
+    /// missing settings JSON skips proto encoding entirely.
     #[serde(default)]
-    pub settings: serde_yaml::Value,
+    pub settings: Option<serde_yaml::Value>,
     pub channel: Option<String>,
     pub queue_type: Option<String>,
     pub response_type: Option<String>,
@@ -84,13 +89,18 @@ pub struct RetryPolicySpec {
 /// Register a single worker. Looks up the runner by name, encodes
 /// `settings_json` to proto bytes via the runner's schema, fills in
 /// `runner_id` / `runner_settings`, and calls `upsert_worker`.
+///
+/// `settings_json = None` sends empty `runner_settings` bytes regardless of
+/// the runner's schema, mirroring the existing `helper.rs` upsert helpers
+/// so that runners with optional-only schemas can be registered with no
+/// configuration. `Some(Value::Null)` is treated the same way.
 pub async fn register_worker<C>(
     client: &C,
     cx: Option<&opentelemetry::Context>,
     metadata: Arc<HashMap<String, String>>,
     runner_name: &str,
     mut worker_data: WorkerData,
-    settings_json: &serde_json::Value,
+    settings_json: Option<&serde_json::Value>,
 ) -> Result<WorkerId>
 where
     C: UseJobworkerpClientHelper + Send + Sync,
@@ -99,12 +109,13 @@ where
         .find_runner_or_error(cx, metadata.clone(), runner_name)
         .await?;
     let settings_desc = JobworkerpProto::parse_runner_settings_schema_descriptor(&rdata)?;
-    let settings_bytes = match settings_desc {
-        Some(desc) => JobworkerpProto::json_value_to_message(desc, settings_json, true, true)
-            .with_context(|| {
+    let settings_bytes = match (settings_desc, settings_json) {
+        (Some(desc), Some(json)) if !json.is_null() => {
+            JobworkerpProto::json_value_to_message(desc, json, true, true).with_context(|| {
                 format!("encoding runner_settings for runner '{runner_name}' as proto failed")
-            })?,
-        None => Vec::new(),
+            })?
+        }
+        _ => Vec::new(),
     };
     worker_data.runner_id = Some(runner_id);
     worker_data.runner_settings = settings_bytes;
@@ -141,6 +152,14 @@ where
 
 /// Variant of [`register_workers_from_yaml`] that takes raw YAML text.
 /// `base_dir` is used to resolve `$file: <relative-path>` includes.
+///
+/// All YAML-level validation (env expansion, include resolution, enum
+/// parsing in [`build_worker_data`], YAML→JSON conversion) is performed
+/// up-front for every spec before any network call. If any spec fails
+/// validation, no worker is registered. Once validation passes, workers
+/// are upserted sequentially in YAML order; a network failure mid-loop
+/// can still leave earlier workers registered (jobworkerp's
+/// `UpsertByName` is idempotent, so a retry recovers).
 pub async fn register_workers_from_yaml_str<C>(
     client: &C,
     cx: Option<&opentelemetry::Context>,
@@ -156,28 +175,61 @@ where
         serde_yaml::from_str(&expanded).with_context(|| "failed to parse workers YAML")?;
 
     let WorkersYaml { defaults, workers } = doc;
-    let mut out = HashMap::with_capacity(workers.len());
-    for mut spec in workers {
-        let runner_name = std::mem::take(&mut spec.runner);
-        let worker_name = spec.name.clone();
-        let mut settings_yaml = std::mem::take(&mut spec.settings);
-        resolve_includes(&mut settings_yaml, base_dir).await?;
-        let settings_json = serde_json::to_value(&settings_yaml).with_context(|| {
-            format!("converting runner_settings of worker '{worker_name}' to JSON failed")
-        })?;
-        let worker_data = build_worker_data(&spec, &defaults)?;
+    let prepared = prepare_workers(workers, &defaults, base_dir).await?;
 
+    let mut out = HashMap::with_capacity(prepared.len());
+    for prep in prepared {
         let id = register_worker(
             client,
             cx,
             metadata.clone(),
-            &runner_name,
-            worker_data,
-            &settings_json,
+            &prep.runner_name,
+            prep.worker_data,
+            prep.settings_json.as_ref(),
         )
         .await
-        .with_context(|| format!("registering worker '{worker_name}' failed"))?;
-        out.insert(worker_name, id);
+        .with_context(|| format!("registering worker '{}' failed", prep.worker_name))?;
+        out.insert(prep.worker_name, id);
+    }
+    Ok(out)
+}
+
+/// Validated, network-ready worker payload. Built locally before any
+/// jobworkerp RPC so per-spec failures never leak partial registrations.
+struct PreparedWorker {
+    worker_name: String,
+    runner_name: String,
+    worker_data: WorkerData,
+    settings_json: Option<serde_json::Value>,
+}
+
+async fn prepare_workers(
+    workers: Vec<WorkerSpec>,
+    defaults: &WorkerDefaults,
+    base_dir: &Path,
+) -> Result<Vec<PreparedWorker>> {
+    let mut out = Vec::with_capacity(workers.len());
+    for mut spec in workers {
+        let worker_name = spec.name.clone();
+        let runner_name = std::mem::take(&mut spec.runner);
+        let settings_yaml = std::mem::take(&mut spec.settings);
+        let settings_json = match settings_yaml {
+            Some(mut yaml) => {
+                resolve_includes(&mut yaml, base_dir).await?;
+                Some(serde_json::to_value(&yaml).with_context(|| {
+                    format!("converting runner_settings of worker '{worker_name}' to JSON failed")
+                })?)
+            }
+            None => None,
+        };
+        let worker_data = build_worker_data(&spec, defaults)
+            .with_context(|| format!("validating worker '{worker_name}' failed"))?;
+        out.push(PreparedWorker {
+            worker_name,
+            runner_name,
+            worker_data,
+            settings_json,
+        });
     }
     Ok(out)
 }
@@ -305,21 +357,55 @@ pub(crate) fn expand_env(raw: &str) -> Result<String> {
     Ok(out.into_owned())
 }
 
-/// Replace each `{ $file: "<path>" }` mapping in `value` with a string scalar
-/// holding the file's contents. Relative paths resolve against `base_dir`.
+/// Replace each `{ $file: "<path>" }` mapping in `value` with a plain
+/// string scalar holding the file's contents. Relative paths resolve
+/// against `base_dir`.
+///
+/// Path traversal is rejected: the canonical resolved path must live
+/// under the canonical `base_dir`. Absolute paths and `..` segments
+/// that escape `base_dir` are an error rather than a silent file read,
+/// so a malicious YAML cannot exfiltrate arbitrary files via the
+/// runner_settings the operator forwards to jobworkerp.
+///
+/// `base_dir` itself must exist and be canonicalize-able. The included
+/// content is inserted as-is; nested `$file:` directives inside the
+/// content are NOT expanded (the result is a string scalar, which the
+/// walk treats as opaque).
 ///
 /// Implemented as a sync-walk-then-async-read loop so the returned future
 /// stays `Send` (recursive async fns crossing &mut tree borrows do not).
 async fn resolve_includes(value: &mut serde_yaml::Value, base_dir: &Path) -> Result<()> {
+    if first_include_path(value).is_none() {
+        // Avoid the `base_dir` canonicalize round-trip when nothing to do.
+        // (Test fixtures and YAMLs without $file directives skip the I/O entirely.)
+        return Ok(());
+    }
+    let canonical_base = tokio::fs::canonicalize(base_dir).await.with_context(|| {
+        format!(
+            "$file include base_dir {} does not exist or is not accessible",
+            base_dir.display()
+        )
+    })?;
     while let Some(rel) = first_include_path(value) {
-        let file_path = if Path::new(&rel).is_absolute() {
+        let raw_path = if Path::new(&rel).is_absolute() {
             PathBuf::from(&rel)
         } else {
             base_dir.join(&rel)
         };
-        let content = tokio::fs::read_to_string(&file_path)
+        let canonical = tokio::fs::canonicalize(&raw_path)
             .await
-            .with_context(|| format!("$file include failed: {}", file_path.display()))?;
+            .with_context(|| format!("$file include failed: {}", raw_path.display()))?;
+        if !canonical.starts_with(&canonical_base) {
+            return Err(anyhow!(
+                "$file include '{}' resolves to {}, which is outside base_dir {}",
+                rel,
+                canonical.display(),
+                canonical_base.display()
+            ));
+        }
+        let content = tokio::fs::read_to_string(&canonical)
+            .await
+            .with_context(|| format!("$file include read failed: {}", canonical.display()))?;
         let replaced = replace_first_include(value, &content);
         debug_assert!(
             replaced,
@@ -454,15 +540,46 @@ workers:
       blob:
         $file: inc.yaml
 ";
-        let mut doc: WorkersYaml = serde_yaml::from_str(yaml).unwrap();
-        let mut settings = doc.workers[0].settings.clone();
+        let doc: WorkersYaml = serde_yaml::from_str(yaml).unwrap();
+        let mut settings = doc.workers[0]
+            .settings
+            .clone()
+            .expect("settings present in this fixture");
         resolve_includes(&mut settings, dir.path()).await.unwrap();
         let blob = settings.get("blob").unwrap().as_str().unwrap();
         assert_eq!(blob, "hello: world\n");
         // Confirm round-trip into JSON yields a JSON string (not an object).
-        doc.workers[0].settings = settings;
-        let j = serde_json::to_value(&doc.workers[0].settings).unwrap();
+        let j = serde_json::to_value(&settings).unwrap();
         assert!(j["blob"].is_string());
+    }
+
+    #[tokio::test]
+    async fn rejects_file_include_outside_base_dir() {
+        let outer = tempfile::tempdir().unwrap();
+        // Place "secret.yaml" at the top level; the YAML's base_dir is one
+        // directory below, so "../secret.yaml" reaches an existing file
+        // *outside* base_dir — exactly the traversal we want to reject.
+        let secret = outer.path().join("secret.yaml");
+        tokio::fs::write(&secret, "leaked: true\n").await.unwrap();
+        let inner = outer.path().join("base");
+        tokio::fs::create_dir_all(&inner).await.unwrap();
+
+        let mut settings: serde_yaml::Value =
+            serde_yaml::from_str("leak:\n  $file: ../secret.yaml\n").unwrap();
+        let err = resolve_includes(&mut settings, &inner).await.unwrap_err();
+        assert!(
+            err.to_string().contains("outside base_dir"),
+            "expected base_dir escape rejection, got: {err}"
+        );
+
+        // Absolute path to the same secret is also rejected.
+        let mut settings: serde_yaml::Value =
+            serde_yaml::from_str(&format!("leak:\n  $file: {}\n", secret.display())).unwrap();
+        let err = resolve_includes(&mut settings, &inner).await.unwrap_err();
+        assert!(
+            err.to_string().contains("outside base_dir"),
+            "expected absolute-path escape rejection, got: {err}"
+        );
     }
 
     #[test]
@@ -511,7 +628,7 @@ workers:
     }
 
     #[test]
-    fn rejects_unknown_top_level_keys() {
+    fn rejects_unknown_worker_field() {
         let yaml = r"
 workers:
   - name: w1
@@ -520,5 +637,23 @@ workers:
 ";
         let err = serde_yaml::from_str::<WorkersYaml>(yaml).unwrap_err();
         assert!(err.to_string().contains("response_typo"));
+    }
+
+    #[test]
+    fn rejects_unknown_root_field() {
+        // A typo of `defaults` (e.g. `defualts`) must error rather than
+        // silently leave defaults unset; ditto for any other top-level key.
+        let yaml = r"
+defualts:
+  store_failure: false
+workers:
+  - name: w1
+    runner: COMMAND
+";
+        let err = serde_yaml::from_str::<WorkersYaml>(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("defualts"),
+            "expected unknown-field error mentioning 'defualts', got: {err}"
+        );
     }
 }
