@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod helper;
+pub mod worker_yaml;
 pub mod wrapper;
 
 use crate::grpc::GrpcConnection;
