@@ -38,6 +38,8 @@ pub async fn register_worker<C>(
 
 The `UseJobworkerpClientHelper` trait also exposes a `register_worker` method, so callers can invoke `client.register_worker(...)` alongside the other helpers; the implementation is a thin facade over the free function above.
 
+The trait method is bound by `where Self: Sized`, so it cannot be called through a `dyn UseJobworkerpClientHelper` trait object. Callers that need dynamic dispatch (e.g. holding a `Box<dyn UseJobworkerpClientHelper>`) should call the free function `worker_yaml::register_worker(&*client, ...)` directly — it has no `Sized` bound and accepts any concrete client by reference.
+
 `register_worker` resolves the runner by name and writes the result back into `worker_data` before upserting. Behaviour depends on the combination of `settings_json` and `worker_data.runner_settings`:
 
 | `settings_json`   | `worker_data.runner_settings` | Result |
@@ -152,6 +154,7 @@ store_failure: ${STORE_FAILURE:-true}  # opt in to result storage; bool fields a
 - Variable names must match `[A-Z_][A-Z0-9_]*` (POSIX convention)
 - `${X:-fb}` expands to `fb` when X is unset
 - `${X}` errors out if X is unset (`environment variable 'X' is referenced in YAML without a default`)
+- The default-value segment after `:-` cannot contain `}`; the expander stops capturing at the first `}` it sees. Pre-encode such defaults (URL-encode, etc.) or move them into a `$file:` include.
 - Values are bound at YAML-load time. Because the resulting `WorkerData` is upserted to jobworkerp, env-var changes after registration are not picked up until the process restarts.
 
 ### Structure-safety guard

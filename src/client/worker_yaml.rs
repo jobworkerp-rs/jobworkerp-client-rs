@@ -1359,10 +1359,10 @@ workers:
     }
 
     #[tokio::test]
-    async fn pre_validation_fails_before_any_lookup_for_later_specs() {
-        // Two specs; the second references an unknown runner. The whole
-        // batch must fail without the second's lookup being satisfied,
-        // and (by extension) without any worker being upserted.
+    async fn all_or_nothing_before_upsert_fails_on_unknown_runner() {
+        // Two specs; the second references an unknown runner. Both lookups
+        // run during pre-validation, but the batch must fail before any
+        // worker is upserted — that is the all-or-nothing guarantee.
         let yaml = r"
 workers:
   - name: ok
