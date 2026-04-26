@@ -538,6 +538,37 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             })
         }
     }
+    /// Look up `runner_name`, encode `settings_json` against the runner's
+    /// `runner_settings` proto schema, fill in `runner_id` / `runner_settings`
+    /// on `worker_data`, and upsert it.
+    ///
+    /// Body lives in [`crate::client::worker_yaml::register_worker`] to keep
+    /// `helper.rs` focused on the gRPC plumbing; this is a thin facade so
+    /// callers can do `client.register_worker(...)` next to other helpers.
+    ///
+    /// `Self: Sized` is required because the body forwards `self` by
+    /// reference into a generic free function. Callers therefore must use
+    /// a concrete client type, not `dyn UseJobworkerpClientHelper`.
+    fn register_worker<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        runner_name: &'a str,
+        worker_data: WorkerData,
+        settings_json: Option<&'a serde_json::Value>,
+    ) -> impl std::future::Future<Output = Result<WorkerId>> + Send + 'a
+    where
+        Self: Sized,
+    {
+        crate::client::worker_yaml::register_worker(
+            self,
+            cx,
+            metadata,
+            runner_name,
+            worker_data,
+            settings_json,
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     fn enqueue_and_get_result_worker_job_with_runner<'a>(
         &'a self,
