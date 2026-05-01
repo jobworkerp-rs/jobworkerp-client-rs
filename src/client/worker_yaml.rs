@@ -334,9 +334,9 @@ where
 /// and `worker_data.runner_settings` are already filled, so the
 /// upsert loop only has to call `upsert_worker`.
 #[derive(Debug)]
-struct PreparedWorker {
-    worker_name: String,
-    worker_data: WorkerData,
+pub(crate) struct PreparedWorker {
+    pub(crate) worker_name: String,
+    pub(crate) worker_data: WorkerData,
 }
 
 /// Validate every spec and resolve runner-side metadata up-front.
@@ -346,7 +346,7 @@ struct PreparedWorker {
 /// encoding failures surface before any worker is written to
 /// jobworkerp, restoring the "all-or-nothing pre-validation" guarantee
 /// the documentation promises.
-async fn prepare_workers<C>(
+pub(crate) async fn prepare_workers<C>(
     client: &C,
     cx: Option<&opentelemetry::Context>,
     metadata: Arc<HashMap<String, String>>,
