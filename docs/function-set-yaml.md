@@ -147,7 +147,7 @@ Inherited verbatim from [`worker-yaml.md`](./worker-yaml.md): same `${VAR}` / `$
 
 `register_function_sets_from_yaml*` runs in **two phases** (matching `worker_yaml`):
 
-1. **Pre-validation:** env expansion, YAML parsing, duplicate-name detection, `$file:` resolution, target shape checks, and runner/worker name resolution. Lookups are cached per name within the batch. **No `Create` or `Update` RPC is issued.** If any step fails, no function set is registered.
+1. **Pre-validation:** env expansion via `yaml_common::expand_env`, YAML parsing, duplicate-name detection, target shape checks (`name` xor `id`, `type` enum), and runner/worker name resolution. Name lookups are cached per name within the batch so repeated references round-trip the server only once. **No `Create` or `Update` RPC is issued.** If any step fails, no function set is registered. (`$file:` includes are not part of this pipeline — see "Differences from `worker_yaml`" above.)
 2. **Registration:** validated specs are upserted sequentially in YAML order via the helper's `upsert_function_set_by_name`. A failure here can leave earlier sets registered; because the upsert is idempotent (find→update/create), retrying with the same YAML reconciles the state.
 
 Library-side errors (YAML syntax, target typos, name lookup failures, …) therefore never leave partial registrations behind. Only mid-batch network failures during phase 2 are best-effort, and idempotent retries recover them.
