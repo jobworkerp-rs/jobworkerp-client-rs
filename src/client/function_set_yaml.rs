@@ -1,7 +1,7 @@
 //! YAML-driven function_set registration for jobworkerp.
 //!
 //! Loads N function_set definitions from a single YAML file, expands
-//! `${VAR:-default}` interpolation via [`super::yaml_common::expand_env`],
+//! `%{VAR:-default}` interpolation via [`super::yaml_common::expand_env`],
 //! resolves runner/worker names to IDs, and upserts each `FunctionSetData`
 //! to the jobworkerp server via
 //! [`UseJobworkerpClientHelper::upsert_function_set_by_name`].
