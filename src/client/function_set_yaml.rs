@@ -126,12 +126,12 @@ where
 
 /// Validated, network-ready function_set payload.
 #[derive(Debug, Clone)]
-struct PreparedFunctionSet {
-    name: String,
-    data: FunctionSetData,
+pub(crate) struct PreparedFunctionSet {
+    pub(crate) name: String,
+    pub(crate) data: FunctionSetData,
 }
 
-async fn prepare_function_sets<C>(
+pub(crate) async fn prepare_function_sets<C>(
     client: &C,
     cx: Option<&opentelemetry::Context>,
     metadata: Arc<HashMap<String, String>>,

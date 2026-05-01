@@ -540,7 +540,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             })
         }
     }
-    /// Returns `None` when no function_set has this name.
+    /// Returns `None` when no function_set has this name. The returned
+    /// `FunctionSet` includes the server-assigned `FunctionSetId`, which
+    /// `upsert_function_set_by_name` relies on to discriminate Update vs Create.
     fn find_function_set_by_name<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -688,6 +690,23 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         crate::client::function_set_yaml::register_function_sets_from_yaml(
             self, cx, metadata, yaml_path,
         )
+    }
+
+    /// Thin facade over
+    /// [`crate::client::manifest_yaml::register_manifest_from_yaml`].
+    /// Bound by `Self: Sized` for the same reason as [`Self::register_worker`].
+    fn register_manifest_from_yaml<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        yaml_path: &'a std::path::Path,
+    ) -> impl std::future::Future<Output = Result<crate::client::manifest_yaml::ManifestResult>>
+    + Send
+    + 'a
+    where
+        Self: Sized,
+    {
+        crate::client::manifest_yaml::register_manifest_from_yaml(self, cx, metadata, yaml_path)
     }
 
     /// Look up `runner_name`, encode `settings_json` against the runner's
