@@ -1,12 +1,15 @@
 //! Shared YAML primitives for declarative jobworkerp registration.
 //!
 //! Both [`super::worker_yaml`] and [`super::function_set_yaml`] resolve a YAML
-//! document the same way before serde parsing: `${VAR}` / `${VAR:-default}`
+//! document the same way before serde parsing: `%{VAR}` / `%{VAR:-default}`
 //! interpolation against the process environment, then `{ $file: <path> }`
 //! mappings replaced with the file's contents (constrained to a base
 //! directory). Keeping these in one module guarantees both loaders get the
 //! same security guarantees — a divergence between worker and function_set
 //! YAMLs would mean one path could exfiltrate files the other rejects.
+//!
+//! See `docs/worker-yaml.md` for the rationale behind the `%{...}` delimiter
+//! and the structure-safety envelope.
 
 #![allow(clippy::missing_errors_doc, clippy::doc_markdown)]
 
@@ -16,31 +19,26 @@ use regex::{Captures, Regex};
 use std::path::{Path, PathBuf};
 
 static ENV_RE: Lazy<Regex> = Lazy::new(|| {
-    // ${NAME} or ${NAME:-default} where NAME = [A-Z_][A-Z0-9_]*
-    Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("hardcoded regex")
+    // %{NAME} or %{NAME:-default} where NAME = [A-Z_][A-Z0-9_]*
+    Regex::new(r"%\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("hardcoded regex")
 });
 
-/// Expand `${VAR}` and `${VAR:-default}` against the process environment.
+/// Expand `%{VAR}` and `%{VAR:-default}` against the process environment.
 ///
-/// Returns Err if (a) a variable has neither an env value nor a `:-default`
-/// segment, or (b) the resolved value contains characters that would break
-/// the surrounding YAML structure when inlined as a raw scalar.
+/// Returns Err if a variable has neither an env value nor a `:-default`
+/// segment, or if the resolved value violates [`check_yaml_safe_scalar`].
 ///
-/// The expander runs *before* YAML parsing, so the substituted value is
-/// pasted into the document verbatim. A multi-line value, or one containing
-/// `:` followed by whitespace, would silently re-shape the document — a
-/// `port: ${SECRET}` where `SECRET="a: b"` would parse as a mapping rather
-/// than the intended scalar. The guard therefore rejects characters and
-/// substrings that carry structure-changing meaning at the substitution
-/// site (see [`check_yaml_safe_scalar`] for the precise rules).
-///
-/// **Wrapping the placeholder in YAML quotes does not relax these
-/// checks.** Expansion happens before YAML parsing, so the surrounding
-/// quotes are not visible to the expander; a value containing `"`, `'`,
-/// or `\` will break a `field: "${VAR}"` host context just as readily
-/// as a bare one. Operators must sanitize the value at the source (or
-/// move it out of YAML, e.g. via `$file:`) — there is no escape-at-the-
-/// YAML-level workaround.
+/// **This is raw textual substitution, not a typed template engine.** The
+/// resolved value is pasted into the document before YAML parsing; the YAML
+/// parser then interprets the resulting document, so a value like `true`,
+/// `null`, `9010`, `#hidden`, `&anchor`, or `{a: 1}` will be parsed as the
+/// corresponding YAML form rather than as a string. Callers that require a
+/// string can wrap the placeholder in YAML quotes at the call site
+/// (e.g. `description: "%{TEXT}"` or `'%{TEXT}'`); quoting steers the YAML
+/// parser toward a string interpretation but does **not** escape the value
+/// — a literal `"` / `\` inside a double-quoted form, or `'` inside a
+/// single-quoted form, is still the operator's responsibility. See
+/// `docs/worker-yaml.md` for the full substitution model.
 pub fn expand_env(raw: &str) -> Result<String> {
     // `replace_all` cannot return Result, so we record the first error
     // and bail after the scan completes. Subsequent matches
@@ -59,7 +57,7 @@ pub fn expand_env(raw: &str) -> Result<String> {
                 None => {
                     error = Some(format!(
                         "environment variable '{name}' is referenced in YAML without a default \
-                         (use ${{{name}:-some-default}} to allow a fallback)"
+                         (use %{{{name}:-some-default}} to allow a fallback)"
                     ));
                     return String::new();
                 }
@@ -68,9 +66,7 @@ pub fn expand_env(raw: &str) -> Result<String> {
         if let Err(reason) = check_yaml_safe_scalar(&resolved) {
             error = Some(format!(
                 "environment variable '{name}' resolves to a value that would break the surrounding \
-                 YAML structure: {reason}. Sanitize the value before exporting it; wrapping the \
-                 placeholder in YAML quotes does NOT relax this check because expansion runs before \
-                 YAML parsing and the surrounding quotes are not visible to the expander"
+                 YAML structure: {reason}. Sanitize the value before exporting it"
             ));
             return String::new();
         }
@@ -82,98 +78,23 @@ pub fn expand_env(raw: &str) -> Result<String> {
     Ok(out.into_owned())
 }
 
-/// Reject env values that, when pasted as a raw scalar at the
-/// substitution site, would re-shape the YAML document into something
-/// the template did not intend (a new mapping, an open flow collection,
-/// a comment, a closed quoted scalar mid-string, etc.).
+/// Reject env values containing characters that re-shape the surrounding
+/// YAML document regardless of context: line breaks (`\n` / `\r`) and tab.
+/// A line break splits a single-value scalar across YAML lines; a tab is
+/// rejected at scalar boundaries by YAML 1.2. Both produce silent
+/// corruption rather than a parse error, so the guard catches them
+/// before they reach the parser.
 ///
-/// The check is conservative but tries not to refuse practical
-/// strings. Two failure classes:
-///
-/// 1. **Whole-value structural breakers** — characters or substrings
-///    that re-shape the document anywhere they appear: line breaks,
-///    tabs, `": "` (key/value separator), `" #"` (inline comment),
-///    flow-collection terminators `,` `]` `}` (these split scalars
-///    even mid-string when the host is in a flow context, which we
-///    cannot detect from raw text), and quote / escape characters
-///    `"` `'` `\` (these break a quoted host context such as
-///    `field: "${VAR}"` mid-string — e.g. `SECRET=abc"def` would close
-///    the surrounding `"..."` early and corrupt the document).
-/// 2. **Leading-position indicators** — characters that only change
-///    parsing when they appear at the *start* of the scalar: `#`
-///    (entire value parsed as a comment, leaving the field null),
-///    `&` `*` `!` `|` `>` (YAML anchor / alias / tag / block-scalar
-///    indicators), `[` `{` (flow collection openers), `` ` `` (YAML
-///    reserved), `?` (complex-key indicator), and the two-char
-///    prefixes `"- "` (sequence entry) and `"% "` (directive).
-///    Mid-string occurrences of these (e.g. `postgres://u:p@h?a=1&b=2`
-///    which contains `&`) are left alone because real-world DSNs and
-///    URLs routinely include them.
-///
-/// **Bool/null literals are deliberately allowed.** Values like `true`,
-/// `false`, `yes`, `no`, `null`, `~` flow through unchecked because
-/// they are required for legitimate env interpolation against bool
-/// fields. Pasting them at a string-typed position produces a type
-/// error at YAML→proto encoding time, which is a more precise error
-/// than a blanket pre-parse rejection.
+/// This is the irreducible minimum. Other YAML-significant characters
+/// (`#`, `&`, `*`, `{`, `[`, `:`, quotes, ...) are deliberately allowed
+/// because the call site is responsible for quoting placeholders that
+/// must be strings — see [`expand_env`] and `docs/worker-yaml.md`.
 pub fn check_yaml_safe_scalar(value: &str) -> std::result::Result<(), String> {
     if value.contains('\n') || value.contains('\r') {
         return Err("contains a line break".to_string());
     }
     if value.contains('\t') {
         return Err("contains a tab character".to_string());
-    }
-    if value.contains(": ") {
-        return Err("contains ': ' which YAML treats as a key/value separator".to_string());
-    }
-    if value.contains(" #") {
-        return Err("contains ' #' which YAML treats as a comment marker".to_string());
-    }
-    const ALWAYS_BANNED: &[char] = &[',', ']', '}', '"', '\'', '\\'];
-    if let Some(c) = value.chars().find(|c| ALWAYS_BANNED.contains(c)) {
-        let reason = match c {
-            ',' | ']' | '}' => format!(
-                "contains '{c}' which can terminate a YAML flow collection regardless of context"
-            ),
-            '"' | '\'' => format!(
-                "contains {c:?} which would close or escape a YAML quoted scalar; the surrounding \
-                 quoted form (e.g. `field: \"${{VAR}}\"`) cannot be made safe by escaping at \
-                 expansion time"
-            ),
-            '\\' => format!(
-                "contains '{c}' which is the escape character of YAML double-quoted scalars and \
-                 cannot be safely passed through raw substitution"
-            ),
-            _ => unreachable!(),
-        };
-        return Err(reason);
-    }
-    if let Some(first) = value.chars().next() {
-        const LEADING_BANNED: &[char] = &[
-            '#', // turns the value into a comment, field becomes null
-            '&', // anchor
-            '*', // alias
-            '!', // tag
-            '|', // literal block scalar
-            '>', // folded block scalar
-            '[', // flow sequence opener
-            '{', // flow mapping opener
-            '`', // YAML reserved
-            '?', // complex-key indicator
-        ];
-        if LEADING_BANNED.contains(&first) {
-            return Err(format!(
-                "starts with '{first}' which YAML treats as an indicator at the beginning of a scalar"
-            ));
-        }
-        if value.starts_with("- ") {
-            return Err(
-                "starts with '- ' which YAML treats as a sequence entry marker".to_string(),
-            );
-        }
-        if value.starts_with("% ") {
-            return Err("starts with '% ' which YAML treats as a directive marker".to_string());
-        }
     }
     Ok(())
 }
@@ -274,4 +195,36 @@ fn include_target(map: &serde_yaml::Mapping) -> Option<String> {
         return None;
     }
     v.as_str().map(std::string::ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn jq_and_liquid_expressions_pass_through_unchanged() {
+        // Verifies %{...} does not consume Workflow-DSL ${...} jq filters,
+        // $${...} Liquid templates, or ${{...}} jq object literals.
+        // SAFETY: `#[serial]` guards against concurrent env access.
+        unsafe {
+            std::env::set_var("YAML_COMMON_TEST_HOST", "localhost");
+        }
+        let raw = r#"
+host: %{YAML_COMMON_TEST_HOST}
+filter: ${.input.key}
+filter_obj: ${{a: 1, b: 2}}
+template: $${{ user.name | upcase }}
+"#;
+        let out = expand_env(raw).unwrap();
+        assert!(out.contains("host: localhost"));
+        assert!(out.contains("filter: ${.input.key}"));
+        assert!(out.contains("filter_obj: ${{a: 1, b: 2}}"));
+        assert!(out.contains("template: $${{ user.name | upcase }}"));
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("YAML_COMMON_TEST_HOST");
+        }
+    }
 }

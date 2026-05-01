@@ -86,7 +86,7 @@ If you need true all-or-nothing semantics across both sections, do dry validatio
 
 ## Environment-variable interpolation
 
-Inherited from [`worker-yaml.md`](./worker-yaml.md): same `${VAR}` / `${VAR:-default}` syntax, same structure-safety guard, applied to the entire manifest before YAML parsing. Both sections benefit equally.
+Same machinery as `worker_yaml`, applied to the entire manifest before YAML parsing — both sections benefit equally. See [`worker-yaml.md`](./worker-yaml.md#environment-variable-interpolation) for syntax and rationale.
 
 ## `$file:` includes
 

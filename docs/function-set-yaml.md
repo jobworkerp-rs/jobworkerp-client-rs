@@ -4,7 +4,7 @@ The `jobworkerp_client::client::function_set_yaml` module provides a generic lib
 
 By consolidating each `FunctionSetData` field into a single YAML file, function set registration logic that used to be hard-coded in Rust (or hand-built JSON for the CLI `function_set create`) can be expressed declaratively.
 
-This reuses the env-var interpolation machinery from [`worker-yaml.md`](./worker-yaml.md) via the shared `client::yaml_common` module — both loaders therefore have the same security guarantees around `${VAR}` substitution.
+This reuses the env-var interpolation machinery from [`worker-yaml.md`](./worker-yaml.md) via the shared `client::yaml_common` module — both loaders therefore have the same security guarantees around `%{VAR}` substitution.
 
 `$file:` includes are intentionally **not** supported here. Worker YAMLs use them to embed an external document inside `runner_settings`; `FunctionSetData` has no equivalent free-form YAML field, so the directive would have nowhere meaningful to land.
 
@@ -126,7 +126,7 @@ Run **before any server-mutating RPC** (the same all-or-nothing guarantee `worke
 | Failure case | Behaviour |
 |----|----|
 | Env variable unset and no default | Startup fails (pre-validation) |
-| Env value violates the structure-safety guard | Startup fails (see `worker-yaml.md` for the precise rules — same module, same ban list) |
+| Env value contains a line break or tab | Startup fails (see `worker-yaml.md` for the precise rules — same module, same minimal guard) |
 | Top-level / set / target field typo | Startup fails (serde parse stage) |
 | Duplicate `name` within one YAML | Startup fails |
 | `targets` empty | Startup fails |
@@ -139,7 +139,7 @@ Run **before any server-mutating RPC** (the same all-or-nothing guarantee `worke
 
 ## Environment-variable interpolation
 
-Inherited verbatim from [`worker-yaml.md`](./worker-yaml.md): same `${VAR}` / `${VAR:-default}` syntax, same structure-safety guard. The implementation lives in `client::yaml_common` and is shared between the two loaders, so a divergence in security posture is impossible. See `worker-yaml.md#structure-safety-guard` for the precise ban list and rationale.
+Same machinery as `worker_yaml`: see [`worker-yaml.md`](./worker-yaml.md#environment-variable-interpolation) for syntax, the rationale behind the percent delimiter, the structure-safety envelope, and the migration recipe.
 
 `$file:` includes are not processed here — see "Differences from `worker_yaml`" above.
 
