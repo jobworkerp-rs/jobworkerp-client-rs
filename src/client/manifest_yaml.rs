@@ -237,13 +237,13 @@ extra: oops
     #[serial_test::serial]
     fn env_expansion_runs_on_manifest_yaml() {
         // Regression guard: switching from per-section to manifest loader
-        // must not silently drop `${VAR}` interpolation.
+        // must not silently drop `%{VAR}` interpolation.
         // SAFETY: #[serial] guards against concurrent env access.
         unsafe { std::env::set_var("MANIFEST_TEST_NAME", "expanded-name") };
         let yaml = r"
 workers:
   entries:
-    - name: ${MANIFEST_TEST_NAME}
+    - name: %{MANIFEST_TEST_NAME}
       runner: COMMAND
 ";
         let expanded = yaml_common::expand_env(yaml).unwrap();
