@@ -1,8 +1,11 @@
 #![allow(clippy::missing_errors_doc)]
 
+pub mod function_set_yaml;
 pub mod helper;
+pub mod manifest_yaml;
 pub mod worker_yaml;
 pub mod wrapper;
+pub mod yaml_common;
 
 use crate::grpc::GrpcConnection;
 use crate::jobworkerp::function::service::{

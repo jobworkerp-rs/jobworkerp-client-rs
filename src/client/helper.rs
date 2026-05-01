@@ -14,7 +14,9 @@ use crate::jobworkerp::data::{
     JobId, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem, ResultStatus,
     RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
 };
-use crate::jobworkerp::function::data::FunctionSpecs;
+use crate::jobworkerp::function::data::{
+    FunctionSet, FunctionSetData, FunctionSetId, FunctionSpecs,
+};
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
 use crate::jobworkerp::service::{
     CreateJobResponse, JobRequest, RunnerNameRequest, WorkerNameRequest,
@@ -538,6 +540,175 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             })
         }
     }
+    /// Returns `None` when no function_set has this name. The returned
+    /// `FunctionSet` includes the server-assigned `FunctionSetId`, which
+    /// `upsert_function_set_by_name` relies on to discriminate Update vs Create.
+    fn find_function_set_by_name<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        name: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<FunctionSet>>> + Send + 'a
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            let client_clone = self.jobworkerp_client().clone();
+            let req =
+                tonic::Request::new(crate::jobworkerp::function::service::FindByNameRequest {
+                    name: name.to_string(),
+                });
+            Self::trace_grpc_client_with_request(
+                cx.cloned(),
+                "jobworkerp-client",
+                "find_function_set_by_name",
+                "find_by_name",
+                req,
+                move |req| async move {
+                    client_clone
+                        .function_set_client()
+                        .await
+                        .find_by_name(to_request(&metadata, req)?)
+                        .await
+                        .map(|r| r.into_inner().data)
+                        .map_err(|e| ClientError::from_tonic_status(e).into())
+                },
+            )
+            .await
+        }
+    }
+
+    /// Look up by name; `Update` if present, `Create` otherwise. A
+    /// `NOT_FOUND` from `Update` falls back to `Create` exactly once
+    /// (the set was deleted between our `FindByName` and `Update`); any
+    /// other error is surfaced unchanged. The `FunctionSetService` proto
+    /// has no server-side upsert RPC, so this is the canonical idempotent
+    /// path for function_sets.
+    fn upsert_function_set_by_name<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        data: FunctionSetData,
+    ) -> impl std::future::Future<Output = Result<FunctionSetId>> + Send + 'a
+    where
+        Self: Send + Sync,
+    {
+        async move {
+            let name = data.name.clone();
+            let existing = self
+                .find_function_set_by_name(cx, metadata.clone(), &name)
+                .await?;
+            if let Some(FunctionSet {
+                id: Some(existing_id),
+                ..
+            }) = existing
+            {
+                // Clone once so the Create fallback below can still own
+                // `data` if Update fails with NOT_FOUND. The clone is
+                // cheap (small Vec<FunctionUsing>) and avoidable only by
+                // restructuring the Create branch, not worth the churn.
+                let update_req = tonic::Request::new(FunctionSet {
+                    id: Some(existing_id),
+                    data: Some(data.clone()),
+                });
+                let client_clone = self.jobworkerp_client().clone();
+                let update_metadata = metadata.clone();
+                let update_res: Result<()> = Self::trace_grpc_client_with_request(
+                    cx.cloned(),
+                    "jobworkerp-client",
+                    "upsert_function_set_by_name.update",
+                    "update",
+                    update_req,
+                    move |req| async move {
+                        client_clone
+                            .function_set_client()
+                            .await
+                            .update(to_request(&update_metadata, req)?)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| ClientError::from_tonic_status(e).into())
+                    },
+                )
+                .await;
+                match update_res {
+                    Ok(()) => return Ok(existing_id),
+                    Err(e) => {
+                        // Race: the set vanished between our find and update.
+                        // Fall through to Create exactly once. Other errors
+                        // bubble up unchanged.
+                        let is_missing = e
+                            .downcast_ref::<ClientError>()
+                            .map(|ce| matches!(ce, ClientError::NotFound(_)))
+                            .unwrap_or(false);
+                        if !is_missing {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            let create_req = tonic::Request::new(data);
+            let client_clone = self.jobworkerp_client().clone();
+            let create_metadata = metadata;
+            let id_opt: Option<FunctionSetId> = Self::trace_grpc_client_with_request(
+                cx.cloned(),
+                "jobworkerp-client",
+                "upsert_function_set_by_name.create",
+                "create",
+                create_req,
+                move |req| async move {
+                    client_clone
+                        .function_set_client()
+                        .await
+                        .create(to_request(&create_metadata, req)?)
+                        .await
+                        .map(|r| r.into_inner().id)
+                        .map_err(|e| ClientError::from_tonic_status(e).into())
+                },
+            )
+            .await?;
+            id_opt.ok_or_else(|| {
+                ClientError::RuntimeError(format!(
+                    "function_set Create returned no id for '{name}'"
+                ))
+                .into()
+            })
+        }
+    }
+
+    /// Thin facade over
+    /// [`crate::client::function_set_yaml::register_function_sets_from_yaml`].
+    /// Bound by `Self: Sized` for the same reason as [`Self::register_worker`].
+    fn register_function_sets_from_yaml<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        yaml_path: &'a std::path::Path,
+    ) -> impl std::future::Future<Output = Result<HashMap<String, FunctionSetId>>> + Send + 'a
+    where
+        Self: Sized,
+    {
+        crate::client::function_set_yaml::register_function_sets_from_yaml(
+            self, cx, metadata, yaml_path,
+        )
+    }
+
+    /// Thin facade over
+    /// [`crate::client::manifest_yaml::register_manifest_from_yaml`].
+    /// Bound by `Self: Sized` for the same reason as [`Self::register_worker`].
+    fn register_manifest_from_yaml<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        yaml_path: &'a std::path::Path,
+    ) -> impl std::future::Future<Output = Result<crate::client::manifest_yaml::ManifestResult>>
+    + Send
+    + 'a
+    where
+        Self: Sized,
+    {
+        crate::client::manifest_yaml::register_manifest_from_yaml(self, cx, metadata, yaml_path)
+    }
+
     /// Look up `runner_name`, encode `settings_json` against the runner's
     /// `runner_settings` proto schema, fill in `runner_id` / `runner_settings`
     /// on `worker_data`, and upsert it.
