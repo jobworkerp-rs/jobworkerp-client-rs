@@ -68,7 +68,7 @@ If you need to keep using a standalone YAML, call `register_workers_from_yaml` /
 
 ### Sections are independent and optional
 
-Either section may be omitted entirely; the corresponding `ManifestResult` field is then an empty map. A manifest containing only `workers:` (no `function_sets:`) behaves like `register_workers_from_yaml` operating on the section's `entries`. Likewise for `function_sets:` only. An empty `entries:` list within a present section is also a no-op for that section — note that the section's `defaults:` block is **not** validated when `entries:` is empty (no spec to apply them to), so a typo in `defaults:` only surfaces once you add at least one entry.
+Either section may be omitted entirely; the corresponding `ManifestResult` field is then an empty map. A manifest containing only `workers:` (no `function_sets:`) behaves like `register_workers_from_yaml` operating on the section's `entries`. Likewise for `function_sets:` only. An empty `entries:` list within a present section is also a no-op for that section — but note the validation is split across two layers: field-name typos in `defaults:` are still rejected at parse time (both `WorkerDefaults` and `FunctionSetDefaults` are `#[serde(deny_unknown_fields)]`), while value-level checks that only run when defaults are applied to a spec — enum string parsing for `response_type` / `queue_type` / `retry_policy.type`, and the periodic-vs-DIRECT cross-field rule — are skipped when `entries:` is empty and surface only once you add at least one entry.
 
 The two sections do not share `defaults:` — each maintains its own (`workers.defaults` is a `WorkerDefaults`; `function_sets.defaults` is a `FunctionSetDefaults`). There is no global `defaults:` block at the manifest top level.
 
