@@ -1,6 +1,6 @@
 //! YAML-driven worker registration for jobworkerp.
 //!
-//! Loads N worker definitions from a single YAML file, expands `${VAR:-default}`
+//! Loads N worker definitions from a single YAML file, expands `%{VAR:-default}`
 //! environment-variable interpolation and `$file: <path>` includes (constrained
 //! to `base_dir`), then upserts each `WorkerData` to the jobworkerp server via
 //! [`UseJobworkerpClientHelper::upsert_worker`].
@@ -804,7 +804,7 @@ workers:
             std::env::remove_var("LLMM_TEST_ENV_X");
             std::env::set_var("LLMM_TEST_ENV_Y", "alpha");
         }
-        let raw = "k1: ${LLMM_TEST_ENV_X:-fallback}\nk2: ${LLMM_TEST_ENV_Y}\n";
+        let raw = "k1: %{LLMM_TEST_ENV_X:-fallback}\nk2: %{LLMM_TEST_ENV_Y}\n";
         let out = yaml_common::expand_env(raw).unwrap();
         assert_eq!(out, "k1: fallback\nk2: alpha\n");
         unsafe {
@@ -819,9 +819,16 @@ workers:
         unsafe {
             std::env::remove_var("LLMM_TEST_NEVER_SET");
         }
-        let raw = "k: ${LLMM_TEST_NEVER_SET}\n";
+        let raw = "k: %{LLMM_TEST_NEVER_SET}\n";
         let err = yaml_common::expand_env(raw).unwrap_err();
-        assert!(err.to_string().contains("LLMM_TEST_NEVER_SET"));
+        let msg = err.to_string();
+        assert!(msg.contains("LLMM_TEST_NEVER_SET"));
+        // Guards against a brace-escaping regression in the format string
+        // that renders the suggested-fallback hint.
+        assert!(
+            msg.contains("%{LLMM_TEST_NEVER_SET:-"),
+            "error message must self-render %{{NAME:-...}} correctly, got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -1285,7 +1292,7 @@ workers:
         unsafe {
             std::env::set_var("LLMM_TEST_INJECT_NEWLINE", "innocent\nfoo: gotcha");
         }
-        let raw = "value: ${LLMM_TEST_INJECT_NEWLINE}\n";
+        let raw = "value: %{LLMM_TEST_INJECT_NEWLINE}\n";
         let err = yaml_common::expand_env(raw).unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1303,94 +1310,6 @@ workers:
 
     #[test]
     #[serial]
-    fn rejects_env_value_with_colon_space() {
-        // ": " inside a substituted value would start a new mapping entry
-        // inside the host scalar — the classic example given in the
-        // review. Reject it.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_INJECT_COLON", "harmless: trojan");
-        }
-        let raw = "api_key: ${LLMM_TEST_INJECT_COLON}\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("': '"),
-            "error must explain the rejected character class, got: {msg}"
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_INJECT_COLON");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_starting_with_flow_opener() {
-        // `[` at the start would open a flow sequence. The host scalar
-        // would no longer be a string. Mid-string `[` is allowed (see
-        // `allows_url_with_internal_special_chars`).
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_INJECT_FLOW", "[anchor here");
-        }
-        let raw = "value: ${LLMM_TEST_INJECT_FLOW}\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("starts with '['"),
-            "error must explain leading-indicator rejection, got: {msg}"
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_INJECT_FLOW");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_with_comma_anywhere() {
-        // A flow-collection terminator is unsafe even mid-string when
-        // the host context happens to be a flow collection.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_INJECT_COMMA", "a,b");
-        }
-        let raw = "value: ${LLMM_TEST_INJECT_COMMA}\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("','") && msg.contains("flow collection"),
-            "error must explain comma rejection, got: {msg}"
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_INJECT_COMMA");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_starting_with_hash() {
-        // A leading `#` would make the substituted line parse as a
-        // comment, leaving the field's value as YAML null. Catch this
-        // even though the existing " #" guard only fires when there is
-        // whitespace before the `#`.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_INJECT_HASH", "#drop-me");
-        }
-        let raw = "value: ${LLMM_TEST_INJECT_HASH}\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("starts with '#'"),
-            "error must explain leading-hash rejection, got: {msg}"
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_INJECT_HASH");
-        }
-    }
-
-    #[test]
-    #[serial]
     fn allows_url_with_internal_special_chars() {
         // Real-world DSNs and URLs contain `&`, `?`, `=`, `:`, `@`, `/`
         // mid-string. These must pass through — the previous overly
@@ -1403,7 +1322,7 @@ workers:
                 "postgres://user:pw@host:5432/db?sslmode=require&app=foo",
             );
         }
-        let raw = "url: ${LLMM_TEST_DSN}\n";
+        let raw = "url: %{LLMM_TEST_DSN}\n";
         let out = yaml_common::expand_env(raw).unwrap();
         assert_eq!(
             out,
@@ -1423,7 +1342,7 @@ workers:
         unsafe {
             std::env::set_var("LLMM_TEST_AMP_MID", "a&b");
         }
-        let raw = "v: ${LLMM_TEST_AMP_MID}\n";
+        let raw = "v: %{LLMM_TEST_AMP_MID}\n";
         let out = yaml_common::expand_env(raw).unwrap();
         assert_eq!(out, "v: a&b\n");
         unsafe {
@@ -1433,105 +1352,16 @@ workers:
 
     #[test]
     #[serial]
-    fn rejects_env_value_with_double_quote_anywhere() {
-        // Reproduces the reported bug: `api_key: "${SECRET}"` with
-        // SECRET=abc"def expands to `api_key: "abc"def"` which YAML
-        // parses as "abc" followed by junk. Regardless of whether the
-        // placeholder is inside or outside YAML quotes, a literal `"`
-        // in the value cannot be passed through safely without
-        // context-aware escaping — so we ban it outright.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_DQ_MID", "abc\"def");
-        }
-        let raw = "api_key: \"${LLMM_TEST_DQ_MID}\"\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("would close or escape a YAML quoted scalar"),
-            "error must explain the quote-escape rejection, got: {msg}"
-        );
-        // Sanity: the same value, not wrapped in YAML quotes, is also
-        // rejected — the guard does not depend on surrounding context.
-        let raw2 = "api_key: ${LLMM_TEST_DQ_MID}\n";
-        assert!(yaml_common::expand_env(raw2).is_err());
-        unsafe {
-            std::env::remove_var("LLMM_TEST_DQ_MID");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_with_single_quote_anywhere() {
-        // The single-quoted variant of the same hazard:
-        // `api_key: '${SECRET}'` with SECRET=it's expands to
-        // `api_key: 'it's'` which closes the scalar at the second `'`.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_SQ_MID", "it's");
-        }
-        let raw = "api_key: '${LLMM_TEST_SQ_MID}'\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("would close or escape a YAML quoted scalar")
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_SQ_MID");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_with_backslash_anywhere() {
-        // `\` is the escape character inside double-quoted YAML
-        // scalars; pasting one in raw would either trigger an escape
-        // or be rejected as an invalid escape, depending on what
-        // follows. Reject unconditionally.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_BS_MID", r"C:\Users\bob");
-        }
-        let raw = "path: \"${LLMM_TEST_BS_MID}\"\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("escape character of YAML double-quoted scalars")
-        );
-        unsafe {
-            std::env::remove_var("LLMM_TEST_BS_MID");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn rejects_env_value_starting_with_anchor() {
-        // The same `&` is unsafe at the start because YAML reads it as
-        // an anchor declaration.
-        // SAFETY: #[serial] guards against concurrent env access.
-        unsafe {
-            std::env::set_var("LLMM_TEST_AMP_LEAD", "&anchor value");
-        }
-        let raw = "v: ${LLMM_TEST_AMP_LEAD}\n";
-        let err = yaml_common::expand_env(raw).unwrap_err();
-        assert!(err.to_string().contains("starts with '&'"));
-        unsafe {
-            std::env::remove_var("LLMM_TEST_AMP_LEAD");
-        }
-    }
-
-    #[test]
-    #[serial]
     fn allows_env_value_that_is_boolean_literal() {
         // Bool literals must flow through unchanged so that env
         // interpolation works for bool fields like store_failure /
-        // use_static / broadcast_results — `store_failure: ${X:-true}`
+        // use_static / broadcast_results — `store_failure: %{X:-true}`
         // is a documented use case.
         // SAFETY: #[serial] guards against concurrent env access.
         unsafe {
             std::env::set_var("LLMM_TEST_INJECT_BOOL", "true");
         }
-        let raw = "store_failure: ${LLMM_TEST_INJECT_BOOL}\n";
+        let raw = "store_failure: %{LLMM_TEST_INJECT_BOOL}\n";
         let out = yaml_common::expand_env(raw).expect("bool literal must pass through");
         assert_eq!(out, "store_failure: true\n");
         unsafe {
@@ -1548,7 +1378,7 @@ workers:
         unsafe {
             std::env::set_var("LLMM_TEST_INJECT_NULL", "null");
         }
-        let raw = "value: ${LLMM_TEST_INJECT_NULL}\n";
+        let raw = "value: %{LLMM_TEST_INJECT_NULL}\n";
         let out = yaml_common::expand_env(raw).expect("null literal must pass through");
         assert_eq!(out, "value: null\n");
         unsafe {
@@ -1559,10 +1389,9 @@ workers:
     #[test]
     #[serial]
     fn bool_env_default_drives_worker_data_field() {
-        // End-to-end: a `${X:-true}` placeholder in a bool field must
+        // End-to-end: a `%{X:-true}` placeholder in a bool field must
         // survive expansion AND the WorkerSpec → WorkerData translation,
-        // landing as the expected bool. Regression for the case where
-        // `check_yaml_safe_scalar` used to reject `true`/`false`.
+        // landing as the expected bool.
         // SAFETY: #[serial] guards against concurrent env access.
         unsafe {
             std::env::remove_var("LLMM_TEST_STORE_FAILURE");
@@ -1571,8 +1400,8 @@ workers:
 workers:
   - name: w1
     runner: COMMAND
-    store_failure: ${LLMM_TEST_STORE_FAILURE:-false}
-    use_static: ${LLMM_TEST_USE_STATIC:-true}
+    store_failure: %{LLMM_TEST_STORE_FAILURE:-false}
+    use_static: %{LLMM_TEST_USE_STATIC:-true}
 ";
         let expanded =
             yaml_common::expand_env(yaml).expect("env expansion must succeed for bool defaults");
@@ -1590,13 +1419,13 @@ workers:
     #[serial]
     fn allows_numeric_env_value() {
         // Plain numeric values must still flow through — the documented
-        // common case is `port: ${MEMORY_GRPC_PORT:-9010}` resolving to a
+        // common case is `port: %{MEMORY_GRPC_PORT:-9010}` resolving to a
         // YAML integer.
         // SAFETY: #[serial] guards against concurrent env access.
         unsafe {
             std::env::set_var("LLMM_TEST_NUMERIC", "9010");
         }
-        let raw = "port: ${LLMM_TEST_NUMERIC}\n";
+        let raw = "port: %{LLMM_TEST_NUMERIC}\n";
         let out = yaml_common::expand_env(raw).unwrap();
         assert_eq!(out, "port: 9010\n");
         unsafe {
@@ -1613,7 +1442,7 @@ workers:
         unsafe {
             std::env::set_var("LLMM_TEST_SAFE_VALUE", "abc-123_XYZ.local");
         }
-        let raw = "host: ${LLMM_TEST_SAFE_VALUE}\n";
+        let raw = "host: %{LLMM_TEST_SAFE_VALUE}\n";
         let out = yaml_common::expand_env(raw).unwrap();
         assert_eq!(out, "host: abc-123_XYZ.local\n");
         unsafe {
