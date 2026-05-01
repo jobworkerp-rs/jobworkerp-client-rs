@@ -141,50 +141,89 @@ Note: the CLI `worker create` command (in `command/worker.rs`) accepts a runner 
 
 ## Environment-variable interpolation
 
-Substitution is plain string replacement that runs *before* YAML parsing. `${VAR}` and `${VAR:-default}` are recognised wherever they appear in the raw text:
+Substitution is plain string replacement that runs *before* YAML parsing. `%{VAR}` and `%{VAR:-default}` are recognised wherever they appear in the raw text:
 
 ```yaml
-host: ${MEMORY_GRPC_HOST:-127.0.0.1}
-port: ${MEMORY_GRPC_PORT:-9010}
-api_key: ${SECRET_KEY}        # no default — error if SECRET_KEY is unset
-url: ${DATABASE_URL}          # DSN with `:`, `@`, `?`, `&`, `=`, `/` is fine — see guard below
-store_failure: ${STORE_FAILURE:-true}  # opt in to result storage; bool fields accept bool literals (true/false/yes/no/null/~)
+host: %{MEMORY_GRPC_HOST:-127.0.0.1}
+port: %{MEMORY_GRPC_PORT:-9010}
+api_key: %{SECRET_KEY}        # no default — error if SECRET_KEY is unset
+url: %{DATABASE_URL}          # DSN with `:`, `@`, `?`, `&`, `=`, `/` is fine
+store_failure: %{STORE_FAILURE:-true}  # bool fields accept bool literals (true/false/yes/no/null/~)
 ```
 
-- Variable names must match `[A-Z_][A-Z0-9_]*` (POSIX convention)
-- `${X:-fb}` expands to `fb` when X is unset
-- `${X}` errors out if X is unset (`environment variable 'X' is referenced in YAML without a default`)
+- Variable names must match `[A-Z_][A-Z0-9_]*` (POSIX convention).
+- `%{X:-fb}` expands to `fb` when X is unset.
+- `%{X}` errors out if X is unset (`environment variable 'X' is referenced in YAML without a default`).
 - The default-value segment after `:-` cannot contain `}`; the expander stops capturing at the first `}` it sees. Pre-encode such defaults (URL-encode, etc.) or move them into a `$file:` include.
 - Values are bound at YAML-load time. Because the resulting `WorkerData` is upserted to jobworkerp, env-var changes after registration are not picked up until the process restarts.
 
-### Structure-safety guard
+### Why the percent delimiter
 
-Because substitution runs before YAML parsing, the resolved value is pasted into the document verbatim and **the expander cannot tell whether the placeholder sits inside YAML quotes**. The guard therefore applies the same rules to every placeholder; YAML-quoting it does not relax them. The intent is to refuse values that would change the field's *type* or *shape* while letting practical strings (DSNs, URLs, paths, tokens) through.
+The jobworkerp Workflow DSL reserves `${...}` for **jq filter expressions** (e.g. `${.input.key}`, `${{a: b}}` for a jq object literal) and `$${...}` for **Liquid templates**. A worker YAML can embed a workflow document inside `runner_settings.workflow_data` via `$file:`; if `expand_env` consumed `${...}` it would silently corrupt every jq expression in the embedded document before the YAML even parsed. `%{...}` collides with none of the Workflow DSL forms, with shell, with GitHub Actions `${{ }}`, or with YAML's `<<:` merge keys.
 
-Two failure classes:
+### Migration from the dollar delimiter
 
-1. **Whole-value structural breakers** — characters or substrings that re-shape the document anywhere they appear:
-   - line break (`\n`, `\r`)
-   - tab character
-   - `": "` (key/value separator)
-   - `" #"` (inline comment marker)
-   - `,`, `]`, `}` (these split or close a flow collection if the host happens to be in a flow context)
-   - `"`, `'`, `\` — these break a YAML quoted scalar from the inside; e.g. `api_key: "${SECRET}"` with `SECRET=abc"def` would expand to `api_key: "abc"def"` and corrupt the document. Because the expander cannot see the surrounding quotes, the only safe option is to refuse the value outright.
-2. **Leading-position indicators** — characters that only re-interpret the value when they appear at the *very start* of the resolved scalar; mid-string occurrences are allowed:
-   - `#` (turns the entire value into a comment, leaving the field null)
-   - `&` (anchor), `*` (alias), `!` (tag)
-   - `|`, `>` (block-scalar indicators)
-   - `[`, `{` (flow collection openers)
-   - `` ` `` (YAML reserved)
-   - `?` (complex-key indicator)
-   - `"- "` (sequence entry, when followed by space)
-   - `"% "` (directive, when followed by space)
+Pre-existing YAMLs that used the older `${VAR}` / `${VAR:-default}` delimiter need a one-time mechanical rewrite. **Apply only to YAMLs that target the worker / function_set / manifest loaders** — running the regex against a Workflow DSL document or a shell-runner `command` field will rewrite real `${...}` expressions there as well.
 
-**Bool/null literals are deliberately allowed.** Values like `true`, `false`, `yes`, `no`, `null`, `~` flow through unchanged so that env interpolation works for bool fields such as `store_success`, `store_failure`, `use_static`, and `broadcast_results` — `store_failure: ${STORE_FAILURE:-true}` is a supported pattern. Plain numerics like `9010` likewise pass through, so `port: ${PORT:-9010}` resolves to a YAML integer. If a bool/null literal lands at a string-typed position the type mismatch surfaces during downstream YAML→proto encoding, which is a more precise error than a blanket pre-parse rejection.
+```bash
+# GNU sed (Linux); on macOS use `gsed` or pass `sed -i ''` instead of `sed -i`.
+sed -i -E 's/\$\{([A-Z_][A-Z0-9_]*)/%{\1/g' path/to/your-worker.yaml
+```
 
-Real-world strings such as `postgres://user:pw@host:5432/db?sslmode=require&app=foo` pass cleanly: the `&`, `?`, `=`, `:`, `@`, `/` are mid-string, none of the leading-position bans apply, and there is no `": "` substring (the `:` after `host` is followed by `5432`, not a space).
+The character class inside the braces (`:-default`, `}`) is untouched, so `${VAR}` and `${VAR:-default}` are both rewritten correctly. Lowercase identifiers like `${var}` were never accepted by `expand_env`, so they pass through this regex unchanged — and that is the right outcome because `${.foo}` jq expressions also start with a non-uppercase character.
 
-Values that contain literal `"`, `'`, or `\` (Windows paths, JSON fragments, passwords with embedded quotes) cannot be passed through env interpolation safely. Move them into an external file referenced via `$file:`, or pre-encode them (e.g. base64 / URL-encode) and decode at the consumer.
+### Substitution model: textual, before YAML parsing
+
+`expand_env` is **raw textual substitution** that runs before YAML is parsed: the resolved env value is pasted into the document at the placeholder site without any quoting, escaping, or type coercion. The YAML parser then interprets the resulting document. Two consequences follow that callers are responsible for:
+
+1. **Document structure is the operator's responsibility.** Whatever the env value looks like, the document the YAML parser sees must still be a valid YAML document. The guard built into `expand_env` rejects only the irreducible structure-breakers — line break (`\n`, `\r`) and tab — because those produce silent corruption rather than parse errors. Move values containing line breaks or tabs into an external file referenced via `$file:`, or pre-encode them (e.g. base64 / URL-encode) and decode at the consumer.
+
+2. **Type interpretation is the operator's responsibility.** The placeholder is replaced verbatim, so the resolved value is interpreted by the YAML parser exactly as if you had typed it into the document yourself. A bare `key: %{VAR}` therefore behaves differently depending on what `VAR` resolves to:
+
+   | Env value | YAML parses `key:` as |
+   |---|---|
+   | `hello`, `abc-123_X`, `postgres://user:pw@h/db?x=1&y=2` | string `"hello"` etc. — the common case |
+   | `true`, `false`, `yes`, `no` | boolean — required for fields like `store_failure`, but a foot-gun for string fields |
+   | `null`, `~` | YAML null |
+   | `9010` | integer |
+   | `#hidden` | YAML null (the `#` starts a comment, the field becomes empty) |
+   | `&prod secret` | string `"secret"` with `&prod` taken as a YAML anchor declaration |
+   | `{a: 1}` | flow mapping `{a: 1}`, not the string `"{a: 1}"` |
+   | `[1, 2]` | flow sequence, not a string |
+   | `: trailing` | depending on context, can re-shape the surrounding mapping |
+
+   When the field schema requires a string and the value might match one of the non-string forms above, **wrap the placeholder in YAML quotes** at the call site. Quoting steers the YAML parser toward a string interpretation; it does **not** sanitise the value:
+
+   ```yaml
+   description: "%{DESCRIPTION_TEXT}"   # avoids bool/null/map/comment interpretation; value must be safe for double quotes
+   api_key: '%{SECRET_KEY}'             # avoids bool/null/map/comment interpretation; value must be safe for single quotes
+   ```
+
+   Numeric, bool, and null literals are deliberately allowed unquoted by the guard — `port: %{PORT:-9010}` resolving to integer `9010` and `store_failure: %{STORE_FAILURE:-true}` resolving to bool `true` are documented patterns. If a bool/null/numeric literal lands at a string-typed position the type mismatch surfaces during YAML→proto encoding, which is a more precise error than a blanket pre-parse rejection — but quoting the placeholder at the call site avoids the mismatch in the first place.
+
+#### Quoting steers type interpretation; it does not escape
+
+Substitution is raw text replacement. The expander does not know which quote style (if any) surrounds the placeholder, and it does not transform the value to fit that context. Quoting at the call site has one specific job — biasing the YAML parser to interpret the resolved value as a string rather than a bool / null / mapping / anchor / comment — and the operator is responsible for ensuring the value is actually safe inside the chosen quote style.
+
+What each form does and does not guarantee:
+
+- **`"%{VAR}"` (double-quoted)** — YAML 1.2 processes C-style escapes inside this form: `\n` → LF, `\t` → TAB, `\\` → `\`, `\"` → `"`, `\xNN` / `\uNNNN` / `\UNNNNNNNN` → the corresponding code point. The parser also rejects unknown escapes (`\U` not followed by 8 hex digits, `\X`, etc.) as a parse error. So:
+  - A literal `"` in the value closes the scalar early (`"abc"def"` → `"abc"` followed by garbage).
+  - A literal `\` followed by a recognised escape character mutates the value (`C:\nope` → C, LF, `ope`).
+  - A literal `\` followed by an unrecognised escape character is a parse error.
+  - For a value that may contain `"`, `\`, or any literal control character that double-quoted YAML would interpret, prefer single quotes or move the value out via `$file:`.
+- **`'%{VAR}'` (single-quoted)** — YAML does not process backslash escapes inside this form. The only character with special meaning is `'` itself, which must be doubled (`''`) to represent a literal apostrophe. The substitution does not insert that doubling automatically, so a literal `'` in the value closes the scalar early. For values that may contain both `'` and `"`, move them out of YAML via `$file:` or pre-encode at the source.
+- **Bare `%{VAR}` (no quotes)** — the resolved value is parsed as if you had typed it directly into the document, with the type-inference table above. Use this only when bool/null/numeric interpretation is desired (e.g. `port:`, `store_failure:`) or when you control the value tightly enough to know it is a plain string.
+
+In short: quoting at the call site solves YAML *type* ambiguity; it does not solve YAML *escape* hazards. For tokens that may contain quote characters or backslash escapes, route them through `$file:` or pre-encode them.
+
+#### Real-world strings flow through cleanly
+
+DSNs, URLs, file paths, JSON fragments, and most password-shaped tokens fit one of the safe categories above:
+
+- `postgres://user:pw@host:5432/db?sslmode=require&app=foo` — bare scalar, no leading-indicator, no `: ` substring inside, parses as a single string.
+- `C:\Users\bob` — bare scalar; the `\` is not special in plain (unquoted) YAML scalars.
+- `{"key": "value"}` — JSON fragments contain literal `"` characters, so neither bare nor double-quoted placement works (the unquoted form parses as a YAML flow mapping; `"%{JSON}"` would close the host scalar at the first inner `"`). Move the fragment into an external file referenced via `$file:`, or pre-encode the value (e.g. base64) at the source and decode at the consumer. Pre-escaping the inner quotes for YAML double-quoted scalars (`\"`) is also possible but error-prone — `$file:` is the recommended path.
 
 ## `$file: <path>` file includes
 
@@ -237,7 +276,7 @@ When several workers share the same `runner:`, the lookup is cached per name so 
 | `settings` does not match the runner schema | Startup fails (pre-validation) |
 | Worker has `settings` but the runner declares no `runner_settings` schema | Startup fails (pre-validation) |
 | `settings` contains a key that is not in the runner's `runner_settings` proto schema (typo) | Startup fails (pre-validation — `ignore_unknown_fields=false` for declarative registration) |
-| Env value violates the structure-safety guard (line break, tab, `": "`, `" #"`, `,`, `]`, `}`, `"`, `'`, `\` anywhere; or starts with `#`, `&`, `*`, `!`, `|`, `>`, `[`, `{`, `` ` ``, `?`, `"- "`, `"% "`) | Startup fails (pre-validation — see "Structure-safety guard") |
+| Env value contains a line break (`\n` / `\r`) or tab | Startup fails (pre-validation — see "Substitution model: textual, before YAML parsing") |
 | Worker has `periodic_interval > 0` and `response_type: DIRECT` | Startup fails (pre-validation — proto rule: periodic workers must use `NO_RESULT`) |
 | Network failure mid-upsert (phase 2) | Earlier workers may already be registered; idempotent retry reconciles |
 
