@@ -599,11 +599,9 @@ async fn apply_workers(
         }
     };
 
-    if registered.is_empty() {
-        println!("(no workers registered)");
-        return;
-    }
-
+    // Always route through visualize_rows even when empty so `--format json`
+    // emits a valid `[]` rather than a human-readable sentinel that would
+    // break downstream script parsers.
     let rows = id_map_to_rows(registered, "worker_id");
     let options = DisplayOptions::new(format)
         .with_color(supports_color())
