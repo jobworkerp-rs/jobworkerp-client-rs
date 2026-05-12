@@ -31,6 +31,12 @@ impl UseJobworkerpClient for JobworkerpClientWrapper {
 impl UseJobworkerpClientHelper for JobworkerpClientWrapper {}
 impl Tracing for JobworkerpClientWrapper {}
 
+impl From<JobworkerpClient> for JobworkerpClientWrapper {
+    fn from(jobworkerp_client: JobworkerpClient) -> Self {
+        Self { jobworkerp_client }
+    }
+}
+
 impl JobworkerpClientWrapper {
     const DEFAULT_REQUEST_TIMEOUT_SEC: u32 = 1200;
     pub async fn new(address: &str, request_timeout_sec: Option<u32>) -> Result<Self> {
