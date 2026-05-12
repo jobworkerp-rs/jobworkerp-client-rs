@@ -156,6 +156,18 @@ impl JsonVisualizer for CardVisualizer {
 /// Pretty JSON format visualizer
 pub struct JsonPrettyVisualizer;
 
+/// Dispatch to the visualizer matching `options.format`. Centralises the
+/// `match format { Table => …, Card => …, Json => … }` block that the
+/// per-command modules would otherwise repeat for every list-style output.
+#[must_use]
+pub fn visualize_rows(data: &[JsonValue], options: &DisplayOptions) -> String {
+    match options.format {
+        crate::display::DisplayFormat::Table => TableVisualizer.visualize(data, options),
+        crate::display::DisplayFormat::Card => CardVisualizer.visualize(data, options),
+        crate::display::DisplayFormat::Json => JsonPrettyVisualizer.visualize(data, options),
+    }
+}
+
 /// Streaming table format visualizer (displays each item as individual table)
 pub struct StreamingTableVisualizer;
 

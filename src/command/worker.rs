@@ -13,11 +13,14 @@
 // --use-static <bool> use static worker (for create, update) (default: false)
 
 use crate::{
-    client::helper::DEFAULT_RETRY_POLICY,
-    command::to_request,
+    client::{
+        helper::DEFAULT_RETRY_POLICY, helper::UseJobworkerpClientHelper,
+        wrapper::JobworkerpClientWrapper,
+    },
+    command::{id_map_to_rows, to_request},
     display::{
         CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer,
-        utils::supports_color,
+        utils::supports_color, visualize_rows,
     },
     jobworkerp::{
         self,
@@ -29,7 +32,7 @@ use crate::{
 use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
 // use command_utils::protobuf::ProtobufDescriptor;
-use std::{collections::HashMap, process::exit};
+use std::{collections::HashMap, path::PathBuf, process::exit, sync::Arc};
 
 pub mod display;
 use display::worker_to_json;
@@ -127,6 +130,15 @@ pub enum WorkerCommand {
         id: i64,
     },
     Count {},
+    /// Apply worker definitions from a YAML manifest file.
+    Apply {
+        /// Path to the worker YAML file (see docs/worker-yaml.md).
+        file: PathBuf,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -456,6 +468,13 @@ impl WorkerCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
+            Self::Apply {
+                file,
+                format,
+                no_truncate,
+            } => {
+                apply_workers(client, metadata, file, *format, *no_truncate).await;
+            }
         }
         async fn print_worker_formatted(
             client: &crate::client::JobworkerpClient,
@@ -558,5 +577,96 @@ impl WorkerCommand {
         //     }
         //     Ok(())
         // }
+    }
+}
+
+async fn apply_workers(
+    client: &crate::client::JobworkerpClient,
+    metadata: &HashMap<String, String>,
+    file: &std::path::Path,
+    format: crate::display::DisplayFormat,
+    no_truncate: bool,
+) {
+    let wrapper: JobworkerpClientWrapper = client.clone().into();
+    let registered = match wrapper
+        .register_workers_from_yaml(None, Arc::new(metadata.clone()), file)
+        .await
+    {
+        Ok(map) => map,
+        Err(err) => {
+            eprintln!("worker apply failed: {err:#}");
+            exit(1);
+        }
+    };
+
+    if registered.is_empty() {
+        println!("(no workers registered)");
+        return;
+    }
+
+    let rows = id_map_to_rows(registered, "worker_id");
+    let options = DisplayOptions::new(format)
+        .with_color(supports_color())
+        .with_no_truncate(no_truncate);
+    println!("{}", visualize_rows(&rows, &options));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct TestRoot {
+        #[clap(subcommand)]
+        cmd: WorkerCommand,
+    }
+
+    #[test]
+    fn parses_apply_with_format_and_no_truncate() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "apply",
+            "./workers.yaml",
+            "--format",
+            "json",
+            "--no-truncate",
+        ]);
+        match parsed.cmd {
+            WorkerCommand::Apply {
+                file,
+                format,
+                no_truncate,
+            } => {
+                assert_eq!(file, PathBuf::from("./workers.yaml"));
+                assert!(matches!(format, crate::display::DisplayFormat::Json));
+                assert!(no_truncate);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_defaults_to_table_format() {
+        let parsed = TestRoot::parse_from(["test", "apply", "./workers.yaml"]);
+        match parsed.cmd {
+            WorkerCommand::Apply {
+                format,
+                no_truncate,
+                ..
+            } => {
+                assert!(matches!(format, crate::display::DisplayFormat::Table));
+                assert!(!no_truncate);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_rejects_unknown_format() {
+        let err = TestRoot::try_parse_from(["test", "apply", "./workers.yaml", "--format", "xml"])
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("xml") || msg.contains("invalid value"));
     }
 }

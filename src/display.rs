@@ -12,7 +12,9 @@ pub mod visualizer;
 // Re-exports for public API
 pub use format::DisplayFormat;
 pub use utils::{format_json_hierarchy, truncate_string};
-pub use visualizer::{CardVisualizer, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer};
+pub use visualizer::{
+    CardVisualizer, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer, visualize_rows,
+};
 
 /// Display configuration options
 #[derive(Debug, Clone)]

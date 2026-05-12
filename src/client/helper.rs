@@ -676,6 +676,21 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     }
 
     /// Thin facade over
+    /// [`crate::client::worker_yaml::register_workers_from_yaml`].
+    /// Bound by `Self: Sized` for the same reason as [`Self::register_worker`].
+    fn register_workers_from_yaml<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        yaml_path: &'a std::path::Path,
+    ) -> impl std::future::Future<Output = Result<HashMap<String, WorkerId>>> + Send + 'a
+    where
+        Self: Sized,
+    {
+        crate::client::worker_yaml::register_workers_from_yaml(self, cx, metadata, yaml_path)
+    }
+
+    /// Thin facade over
     /// [`crate::client::function_set_yaml::register_function_sets_from_yaml`].
     /// Bound by `Self: Sized` for the same reason as [`Self::register_worker`].
     fn register_function_sets_from_yaml<'a>(

@@ -33,7 +33,7 @@ use jobworkerp_client::{
     client::JobworkerpClient,
     command::{
         function::FunctionArg, function_set::FunctionSetArg, job::JobArg, job_result::JobResultArg,
-        job_status::JobStatusArg, runner::RunnerArg, worker::WorkerArg,
+        job_status::JobStatusArg, manifest::ManifestArg, runner::RunnerArg, worker::WorkerArg,
         worker_instance::WorkerInstanceArg,
     },
 };
@@ -60,6 +60,7 @@ pub(crate) enum SubCommand {
     JobResult(JobResultArg),
     JobStatus(JobStatusArg),
     WorkerInstance(WorkerInstanceArg),
+    Manifest(ManifestArg),
 }
 
 #[tokio::main]
@@ -112,6 +113,9 @@ async fn main() {
             cmd.cmd.execute(&client, &metadata).await;
         }
         SubCommand::WorkerInstance(cmd) => {
+            cmd.cmd.execute(&client, &metadata).await;
+        }
+        SubCommand::Manifest(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
         }
     }
