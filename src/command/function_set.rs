@@ -345,11 +345,9 @@ async fn apply_function_sets(
         }
     };
 
-    if registered.is_empty() {
-        println!("(no function_sets registered)");
-        return;
-    }
-
+    // Always route through visualize_rows even when empty so `--format json`
+    // emits a valid `[]` rather than a human-readable sentinel that would
+    // break downstream script parsers.
     let rows = id_map_to_rows(registered, "function_set_id");
     let options = DisplayOptions::new(format)
         .with_color(supports_color())
