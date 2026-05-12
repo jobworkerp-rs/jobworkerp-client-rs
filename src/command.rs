@@ -30,6 +30,7 @@ pub mod function_set;
 pub mod job;
 pub mod job_result;
 pub mod job_status;
+pub mod manifest;
 pub mod runner;
 pub mod worker;
 pub mod worker_instance;
@@ -90,4 +91,44 @@ pub fn to_request<T>(
         }
     }
     Ok(request)
+}
+
+/// Convert a `name → id` map (the return shape of every
+/// `register_*_from_yaml` helper) into JSON rows sorted by name. The
+/// `id_key` is the JSON field where the numeric id lands — callers use
+/// `"worker_id"` / `"function_set_id"` so downstream visualizers can show
+/// stable column headers.
+#[must_use]
+pub fn id_map_to_rows<I>(map: HashMap<String, I>, id_key: &str) -> Vec<serde_json::Value>
+where
+    I: IdValue,
+{
+    let mut rows: Vec<serde_json::Value> = map
+        .into_iter()
+        .map(|(name, id)| serde_json::json!({ "name": name, id_key: id.id_value() }))
+        .collect();
+    rows.sort_by(|a, b| {
+        a.get("name")
+            .and_then(serde_json::Value::as_str)
+            .cmp(&b.get("name").and_then(serde_json::Value::as_str))
+    });
+    rows
+}
+
+/// Extract the numeric value from a jobworkerp id newtype. Implemented for
+/// the small set of id types that the YAML `apply` commands return.
+pub trait IdValue {
+    fn id_value(&self) -> i64;
+}
+
+impl IdValue for crate::jobworkerp::data::WorkerId {
+    fn id_value(&self) -> i64 {
+        self.value
+    }
+}
+
+impl IdValue for crate::jobworkerp::function::data::FunctionSetId {
+    fn id_value(&self) -> i64 {
+        self.value
+    }
 }

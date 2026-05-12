@@ -6,10 +6,12 @@
 // -c, --category <number> category of the function set (for create, update)
 // -t, --targets <json array string> targets of the function set (for create, update)
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    command::to_request,
+    client::{helper::UseJobworkerpClientHelper, wrapper::JobworkerpClientWrapper},
+    command::{id_map_to_rows, to_request},
+    display::{DisplayOptions, utils::supports_color, visualize_rows},
     jobworkerp::{
         data::{RunnerId, WorkerId},
         function::{
@@ -82,6 +84,15 @@ pub enum FunctionSetCommand {
         id: i64,
     },
     Count {},
+    /// Apply function_set definitions from a YAML manifest file.
+    Apply {
+        /// Path to the function_set YAML file (see docs/function-set-yaml.md).
+        file: PathBuf,
+        #[clap(long, value_enum, default_value = "table")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
+    },
 }
 
 #[allow(
@@ -305,8 +316,46 @@ impl FunctionSetCommand {
                     .unwrap();
                 println!("{response:#?}");
             }
+            Self::Apply {
+                file,
+                format,
+                no_truncate,
+            } => {
+                apply_function_sets(client, metadata, file, *format, *no_truncate).await;
+            }
         }
     }
+}
+
+async fn apply_function_sets(
+    client: &crate::client::JobworkerpClient,
+    metadata: &HashMap<String, String>,
+    file: &std::path::Path,
+    format: crate::display::DisplayFormat,
+    no_truncate: bool,
+) {
+    let wrapper: JobworkerpClientWrapper = client.clone().into();
+    let registered = match wrapper
+        .register_function_sets_from_yaml(None, Arc::new(metadata.clone()), file)
+        .await
+    {
+        Ok(map) => map,
+        Err(err) => {
+            eprintln!("function-set apply failed: {err:#}");
+            std::process::exit(1);
+        }
+    };
+
+    if registered.is_empty() {
+        println!("(no function_sets registered)");
+        return;
+    }
+
+    let rows = id_map_to_rows(registered, "function_set_id");
+    let options = DisplayOptions::new(format)
+        .with_color(supports_color())
+        .with_no_truncate(no_truncate);
+    println!("{}", visualize_rows(&rows, &options));
 }
 
 fn parse_targets(targets_json: &str) -> Vec<FunctionUsing> {
@@ -363,5 +412,65 @@ fn print_function_set(function_set: FunctionSet) {
         }
     } else {
         println!("Invalid function set data");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct TestRoot {
+        #[clap(subcommand)]
+        cmd: FunctionSetCommand,
+    }
+
+    #[test]
+    fn parses_apply_with_format_and_no_truncate() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "apply",
+            "./fs.yaml",
+            "--format",
+            "json",
+            "--no-truncate",
+        ]);
+        match parsed.cmd {
+            FunctionSetCommand::Apply {
+                file,
+                format,
+                no_truncate,
+            } => {
+                assert_eq!(file, PathBuf::from("./fs.yaml"));
+                assert!(matches!(format, crate::display::DisplayFormat::Json));
+                assert!(no_truncate);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_defaults_to_table_format() {
+        let parsed = TestRoot::parse_from(["test", "apply", "./fs.yaml"]);
+        match parsed.cmd {
+            FunctionSetCommand::Apply {
+                format,
+                no_truncate,
+                ..
+            } => {
+                assert!(matches!(format, crate::display::DisplayFormat::Table));
+                assert!(!no_truncate);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_rejects_unknown_format() {
+        let err = TestRoot::try_parse_from(["test", "apply", "./fs.yaml", "--format", "xml"])
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("xml") || msg.contains("invalid value"));
     }
 }
