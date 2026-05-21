@@ -109,10 +109,15 @@ pub fn check_yaml_safe_scalar(value: &str) -> std::result::Result<(), String> {
 /// so a malicious YAML cannot exfiltrate arbitrary files via the
 /// content the operator forwards to jobworkerp.
 ///
-/// `base_dir` itself must exist and be canonicalize-able. The included
-/// content is inserted as-is; nested `$file:` directives inside the
-/// content are NOT expanded (the result is a string scalar, which the
-/// walk treats as opaque).
+/// `base_dir` itself must exist and be canonicalize-able. Nested `$file:`
+/// directives inside the content are NOT expanded (the result is a string
+/// scalar, which the walk treats as opaque), but `%{VAR}` /
+/// `%{VAR:-default}` placeholders in the content ARE expanded via
+/// [`expand_env`]. The top-level [`expand_env`] runs before YAML parsing
+/// and therefore never sees `$file` content (it is read here, afterwards),
+/// so without this second pass an embedded workflow document could not use
+/// env placeholders — its `%{...}` would survive verbatim into the
+/// registered `workflow_data` and reach the runtime as a literal value.
 ///
 /// Implemented as a sync-walk-then-async-read loop so the returned future
 /// stays `Send` (recursive async fns crossing &mut tree borrows do not).
@@ -146,6 +151,11 @@ pub async fn resolve_includes(value: &mut serde_yaml::Value, base_dir: &Path) ->
         let content = tokio::fs::read_to_string(&canonical)
             .await
             .with_context(|| format!("$file include read failed: {}", canonical.display()))?;
+        // Expand `%{VAR}` in the included content too: the top-level
+        // expand_env ran before this file was read, so its placeholders
+        // would otherwise survive verbatim into the registered payload.
+        let content = expand_env(&content)
+            .with_context(|| format!("expanding env in $file include {}", canonical.display()))?;
         let replaced = replace_first_include(value, &content);
         debug_assert!(
             replaced,
@@ -225,6 +235,65 @@ template: $${{ user.name | upcase }}
         // SAFETY: see above.
         unsafe {
             std::env::remove_var("YAML_COMMON_TEST_HOST");
+        }
+    }
+
+    /// `$file` content is read AFTER the top-level expand_env, so
+    /// `resolve_includes` must run its own env expansion on the included
+    /// text — otherwise an embedded workflow document's `%{VAR:-default}`
+    /// would reach the registered payload verbatim. The included document
+    /// also carries jq `${...}` filters, which must survive untouched.
+    #[tokio::test]
+    #[serial]
+    async fn resolve_includes_expands_env_in_included_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let inc = dir.path().join("workflow.yaml");
+        // `%{...:-default}` resolves to the default when unset; the jq
+        // `${...}` filter must pass through unchanged.
+        tokio::fs::write(
+            &inc,
+            "worker: %{YAML_COMMON_TEST_WORKER:-default-worker}\nfilter: ${.input.key}\n",
+        )
+        .await
+        .unwrap();
+
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::remove_var("YAML_COMMON_TEST_WORKER");
+        }
+        let mut value: serde_yaml::Value =
+            serde_yaml::from_str("data:\n  $file: workflow.yaml\n").unwrap();
+        resolve_includes(&mut value, dir.path()).await.unwrap();
+
+        let included = value["data"]
+            .as_str()
+            .expect("included content is a scalar");
+        assert!(
+            included.contains("worker: default-worker"),
+            "%{{...}} in included content must be expanded; got:\n{included}"
+        );
+        assert!(
+            included.contains("filter: ${.input.key}"),
+            "jq ${{...}} in included content must survive; got:\n{included}"
+        );
+
+        // With the env set, the override wins.
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var("YAML_COMMON_TEST_WORKER", "override-worker");
+        }
+        let mut value: serde_yaml::Value =
+            serde_yaml::from_str("data:\n  $file: workflow.yaml\n").unwrap();
+        resolve_includes(&mut value, dir.path()).await.unwrap();
+        assert!(
+            value["data"]
+                .as_str()
+                .unwrap()
+                .contains("worker: override-worker")
+        );
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("YAML_COMMON_TEST_WORKER");
         }
     }
 }
