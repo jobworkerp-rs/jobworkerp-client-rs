@@ -285,11 +285,12 @@ template: $${{ user.name | upcase }}
         let mut value: serde_yaml::Value =
             serde_yaml::from_str("data:\n  $file: workflow.yaml\n").unwrap();
         resolve_includes(&mut value, dir.path()).await.unwrap();
+        let included = value["data"]
+            .as_str()
+            .expect("included content is a scalar");
         assert!(
-            value["data"]
-                .as_str()
-                .unwrap()
-                .contains("worker: override-worker")
+            included.contains("worker: override-worker"),
+            "the env override must win over the default; got:\n{included}"
         );
         // SAFETY: see above.
         unsafe {
