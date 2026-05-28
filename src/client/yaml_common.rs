@@ -99,6 +99,22 @@ pub fn check_yaml_safe_scalar(value: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Resolve the directory used as `base_dir` for `$file:` includes from
+/// the YAML file's path.
+///
+/// `Path::parent()` returns `Some("")` (an empty `PathBuf`) when the
+/// argument has no directory component (e.g. `foo.yaml` passed directly
+/// from a shell `cd`'d into the file's directory). A bare `map_or_else`
+/// on `None` therefore lets the empty path through and the subsequent
+/// `canonicalize` fails with a misleading "does not exist" error. Treat
+/// an empty parent the same as no parent so the fallback to `.` kicks in.
+pub fn yaml_base_dir(yaml_path: &Path) -> PathBuf {
+    match yaml_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
 /// Replace each `{ $file: "<path>" }` mapping in `value` with a plain
 /// string scalar holding the file's contents. Relative paths resolve
 /// against `base_dir`.
@@ -211,6 +227,26 @@ fn include_target(map: &serde_yaml::Mapping) -> Option<String> {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn yaml_base_dir_handles_bare_filename() {
+        // `Path::parent()` returns `Some("")` for a bare filename; without
+        // the explicit empty-check, canonicalize fails with a misleading
+        // "$file include base_dir  does not exist".
+        assert_eq!(yaml_base_dir(Path::new("workers.yaml")), PathBuf::from("."));
+        assert_eq!(
+            yaml_base_dir(Path::new("./workers.yaml")),
+            PathBuf::from(".")
+        );
+        assert_eq!(
+            yaml_base_dir(Path::new("/abs/workers.yaml")),
+            PathBuf::from("/abs")
+        );
+        assert_eq!(
+            yaml_base_dir(Path::new("dir/workers.yaml")),
+            PathBuf::from("dir")
+        );
+    }
 
     #[test]
     #[serial]

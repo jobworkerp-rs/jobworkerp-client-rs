@@ -17,7 +17,7 @@ use crate::jobworkerp::function::data::FunctionSetId;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 /// Combined top-level YAML document. Both sections are optional so a YAML
@@ -72,9 +72,7 @@ where
     let raw = tokio::fs::read_to_string(yaml_path)
         .await
         .with_context(|| format!("failed to read manifest YAML at {}", yaml_path.display()))?;
-    let base_dir = yaml_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let base_dir = yaml_common::yaml_base_dir(yaml_path);
     register_manifest_from_yaml_str(client, cx, metadata, &raw, &base_dir).await
 }
 
