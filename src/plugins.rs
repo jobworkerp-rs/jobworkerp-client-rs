@@ -1,6 +1,11 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
+// V2 plugin ABI (FFI types, vtable, PluginV2 trait, register_plugin_v2!
+// macro) lives in the shared `jobworkerp-plugin-abi` crate so the host
+// runner and this client SDK resolve identical definitions.
+pub use jobworkerp_plugin_abi::{register_plugin_v2, v2};
+
 /// Type alias for the `collect_stream` return type to reduce complexity
 pub type CollectStreamFuture = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<(Vec<u8>, HashMap<String, String>)>> + Send>,
