@@ -55,7 +55,8 @@ tokio-stream = "0.1"
 # point to it via a path override (uncomment the path line below and
 # comment out the git line above). The proc-macro crate is reached via
 # `jobworkerp-plugin-abi`'s own re-export.
-jobworkerp-plugin-abi = { path = "../github/modules/jobworkerp-plugin-abi" }
+jobworkerp-plugin-abi = { git = "https://gitea.sutr.app/jobworkerp-rs/jobworkerp-rs.git", branch = "main", package = "jobworkerp-plugin-abi" }
+
 tracing = "0.1"
 tracing-subscriber = "0.3"
 uuid = { version = "1", features = ["v4", "v7"] }
