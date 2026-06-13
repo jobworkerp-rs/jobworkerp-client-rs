@@ -23,12 +23,7 @@
 // -p, --priority <priority> priority of the job (HIGH, MIDDLE, LOW)(for enqueue)
 // -t, --timeout <timeout> timeout of the job (milli-seconds) (for enqueue)
 
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hasher},
-    str::FromStr,
-    sync::Arc,
-};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use super::WorkerIdOrName;
 use crate::{
@@ -54,8 +49,8 @@ use crate::{
 use anyhow::Result;
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
+use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
-use command_utils::{protobuf::ProtobufDescriptor, util::datetime};
 use opentelemetry::{Context, global, trace::Span};
 use prost::Message;
 
@@ -420,10 +415,8 @@ impl JobCommand {
                     data: Some(rdata),
                 }) = runner
                 {
-                    let mut hasher = DefaultHasher::default();
-                    hasher.write_i64(datetime::now_millis());
-                    hasher.write_i64(rand::random()); // random
-                    let wname = format!("{}_{:x}", "JobworkerpCilentWorkflow", hasher.finish());
+                    let wname =
+                        crate::client::helper::ephemeral_worker_name("JobworkerpClientWorkflow");
 
                     let worker_data = WorkerData {
                         name: wname.clone(),

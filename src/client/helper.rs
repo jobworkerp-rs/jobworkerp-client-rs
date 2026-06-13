@@ -33,6 +33,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
+/// Terminal outcome of a job-id-tracked enqueue.
+///
+/// Unlike the plain output helpers, this preserves the assigned `job_id` and the terminal
+/// `ResultStatus` even when the job failed, so callers can record the executed job for later
+/// status lookup / cancellation. Only enqueue-level failures (the job never started) surface
+/// as `Err`.
+#[derive(Debug, Clone)]
+pub struct JobTerminalOutcome<T> {
+    pub job_id: Option<JobId>,
+    pub status: ResultStatus,
+    pub output: T,
+}
+
+impl<T> JobTerminalOutcome<T> {
+    pub fn is_success(&self) -> bool {
+        self.status == ResultStatus::Success
+    }
+}
+
 pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     r#type: RetryType::Exponential as i32,
     interval: 800,
@@ -40,6 +59,20 @@ pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     max_retry: 1,
     basis: 2.0,
 };
+
+/// Generate a per-execution unique worker name for an ephemeral worker.
+///
+/// `worker.name` is the unique key used by `upsert_by_name`, so a fixed name would make concurrent
+/// executions share one worker row; the first to finish would then delete the worker out from under
+/// the others. Suffixing the prefix with a hash of the current time mixed with a random value makes
+/// each execution own a distinct worker that can be created and deleted independently.
+pub(crate) fn ephemeral_worker_name(prefix: &str) -> String {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut hasher = DefaultHasher::default();
+    hasher.write_i64(command_utils::util::datetime::now_millis());
+    hasher.write_i64(rand::random());
+    format!("{prefix}_{:x}", hasher.finish())
+}
 
 /// Build `WorkerData` with default settings from runner
 fn build_worker_data_default(
@@ -987,6 +1020,59 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .context("enqueue_stream_worker_job")
         }
     }
+    /// Like `enqueue_stream_worker_job` but preserves the raw `tonic::Status` on error instead of
+    /// mapping it through `from_tonic_status` (which drops the metadata). The metadata carries the
+    /// assigned `job_id` and terminal `JobResult` for a terminally-failed streaming job, which the
+    /// caller needs to record the executed job; see `classify_stream_enqueue_error`.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_stream_worker_job_raw<'a>(
+        &'a self,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u32,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+        using: Option<&'a str>,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<
+            (
+                tonic::metadata::MetadataMap,
+                tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>,
+            ),
+            tonic::Status,
+        >,
+    > + Send
+    + 'a {
+        async move {
+            let worker = self
+                .find_or_create_worker(None, metadata.clone(), worker_data)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("find_or_create_worker: {e}")))?;
+            let worker_id = worker
+                .id
+                .ok_or_else(|| tonic::Status::internal("Worker ID not found"))?;
+            let job_request_payload = build_job_request(
+                worker_id,
+                args,
+                timeout_sec,
+                run_after_time,
+                priority,
+                using,
+            );
+            let response = self
+                .jobworkerp_client()
+                .job_client()
+                .await
+                .enqueue_for_stream(
+                    to_request(&metadata, job_request_payload)
+                        .map_err(|e| tonic::Status::internal(format!("to_request: {e}")))?,
+                )
+                .await?;
+            let meta = response.metadata().clone();
+            Ok((meta, response.into_inner()))
+        }
+    }
     fn enqueue_job_and_get_output<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -1098,6 +1184,51 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             .await
         }
     }
+    /// Best-effort deletion of a non-static worker by id. A no-op when `use_static` is true (the
+    /// worker is meant to persist). Deletion is keyed by worker id (not name) so it only removes the
+    /// exact worker this execution created — to make a non-static worker truly ephemeral, callers
+    /// must pair this with a per-execution unique name (`ephemeral_worker_name`) so a concurrent
+    /// execution's worker is never deleted by mistake. Failures are logged but never surfaced:
+    /// cleanup must not mask the job's own result. Shared by the blocking
+    /// (`enqueue_with_ephemeral_worker`) and streaming-first (`execute_workflow_stream_first`) paths
+    /// so both clean up identically.
+    fn delete_non_static_worker(
+        &self,
+        metadata: Arc<HashMap<String, String>>,
+        worker_id: WorkerId,
+        use_static: bool,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        async move {
+            if use_static {
+                return;
+            }
+            match to_request(&metadata, worker_id) {
+                Ok(req) => match self
+                    .jobworkerp_client()
+                    .worker_client()
+                    .await
+                    .delete(req)
+                    .await
+                {
+                    Ok(res) => {
+                        if !res.into_inner().is_success {
+                            tracing::warn!("Failed to delete worker: {:#?}", worker_id);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to delete worker {:#?}: {:#?}", worker_id, e);
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to create delete request for worker {:#?}: {:#?}",
+                        worker_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
     /// Enqueue job with ephemeral worker and delete worker after completion
     fn enqueue_with_ephemeral_worker(
         &self,
@@ -1136,36 +1267,9 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     tracing::warn!("Execute task failed: enqueue job and get output: {:#?}", e);
                 });
 
-            // Delete ephemeral worker regardless of job result
-            if !wdata.use_static {
-                match to_request(&metadata, wid) {
-                    Ok(req) => {
-                        match self
-                            .jobworkerp_client()
-                            .worker_client()
-                            .await
-                            .delete(req)
-                            .await
-                        {
-                            Ok(res) => {
-                                if !res.into_inner().is_success {
-                                    tracing::warn!("Failed to delete worker: {:#?}", wid);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to delete worker {:#?}: {:#?}", wid, e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to create delete request for worker {:#?}: {:#?}",
-                            wid,
-                            e
-                        );
-                    }
-                }
-            }
+            // Delete ephemeral worker regardless of job result.
+            self.delete_non_static_worker(metadata, wid, wdata.use_static)
+                .await;
             output
         }
     }
@@ -1436,6 +1540,103 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             }
         }
     }
+    fn enqueue_with_json_and_job_id<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u32,
+        using: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Result<JobTerminalOutcome<serde_json::Value>>> + Send + 'a
+    {
+        async move {
+            let runner_id = worker_data.runner_id.ok_or_else(|| {
+                ClientError::InvalidParameter(format!(
+                    "runner_id not found in worker_data for {}",
+                    worker_data.name
+                ))
+            })?;
+
+            let runner = self
+                .jobworkerp_client()
+                .runner_client()
+                .await
+                .find(to_request(&metadata, runner_id)?)
+                .await
+                .map(|response| response.into_inner().data)
+                .map_err(ClientError::from_tonic_status)?
+                .ok_or_else(|| {
+                    ClientError::NotFound(format!(
+                        "runner not found with id: {:?} for worker: {}",
+                        runner_id, &worker_data.name
+                    ))
+                })?;
+            let rdata = runner.data.ok_or_else(|| {
+                ClientError::NotFound(format!(
+                    "runner data not found for worker: {}",
+                    worker_data.name
+                ))
+            })?;
+            let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)?;
+            let job_args_bytes = match args_descriptor {
+                Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
+                    .map_err(|e| {
+                    ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}"))
+                })?,
+                _ => serde_json::to_string(&job_args)
+                    .map_err(|e| {
+                        ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
+                    })?
+                    .into_bytes(),
+            };
+
+            let response = self
+                .enqueue_worker_job(
+                    cx,
+                    metadata,
+                    worker_data,
+                    job_args_bytes,
+                    job_timeout_sec,
+                    None,
+                    None,
+                    using,
+                )
+                .await?;
+            let job_id = response.id;
+            let result_data = response
+                .result
+                .ok_or_else(|| ClientError::NotFound("result not found".to_string()))?
+                .data
+                .ok_or_else(|| ClientError::NotFound("result data not found".to_string()))?;
+            let status = result_data.status();
+            // The job reached a terminal state. On failure, surface job_id and status (with the
+            // failure payload as JSON) instead of dropping them, so the executed job can be
+            // tracked / cancelled via the status API.
+            if status != ResultStatus::Success {
+                let error_message = result_data
+                    .output
+                    .map(|o| String::from_utf8_lossy(&o.items).into_owned())
+                    .unwrap_or_default();
+                tracing::warn!("job {:?} failed: {}", job_id, error_message);
+                return Ok(JobTerminalOutcome {
+                    job_id,
+                    status,
+                    output: serde_json::Value::String(error_message),
+                });
+            }
+            let output_bytes = result_data
+                .output
+                .ok_or_else(|| ClientError::NotFound("job result output is empty".to_string()))?
+                .items;
+            let result_descriptor = JobworkerpProto::parse_result_schema_descriptor(&rdata, using)?;
+            Ok(JobTerminalOutcome {
+                job_id,
+                status,
+                output: decode_output_to_json(&output_bytes, result_descriptor.as_ref())?,
+            })
+        }
+    }
     fn delete_worker_by_name<'a>(
         &'a self,
         cx: Option<&'a opentelemetry::Context>,
@@ -1661,6 +1862,113 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     }
 }
 
+/// Encode JSON job args into protobuf bytes against the runner's args-schema descriptor. When the
+/// runner declares no args schema (`descriptor` is `None`), the JSON is serialized verbatim.
+pub(crate) fn encode_job_args_against_descriptor(
+    descriptor: Option<MessageDescriptor>,
+    job_args: &serde_json::Value,
+) -> Result<Vec<u8>> {
+    match descriptor {
+        Some(desc) => {
+            JobworkerpProto::json_value_to_message(desc, job_args, true, true).map_err(|e| {
+                ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}")).into()
+            })
+        }
+        None => serde_json::to_vec(job_args).map_err(|e| {
+            ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}")).into()
+        }),
+    }
+}
+
+/// Decode a prost message from a binary gRPC header (`*-bin`) in a metadata map. Returns `None`
+/// when the header is absent or cannot be decoded — the latter is logged with `context` to
+/// identify the message type.
+fn decode_bin_header<T: prost::Message + Default>(
+    meta: &tonic::metadata::MetadataMap,
+    header_name: &str,
+    context: &str,
+) -> Option<T> {
+    meta.get_bin(header_name)
+        .and_then(|bin| bin.to_bytes().ok())
+        .and_then(|bytes| match T::decode(bytes.as_ref()) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!("Failed to decode {context} from metadata: {e}");
+                None
+            }
+        })
+}
+
+/// Extract the enqueue-assigned `JobId` from a gRPC metadata map (response header or error
+/// trailer), decoding the `x-job-id-bin` binary header. Returns `None` when the header is
+/// absent or cannot be decoded — the latter is logged.
+pub(crate) fn extract_job_id_from_metadata(meta: &tonic::metadata::MetadataMap) -> Option<JobId> {
+    decode_bin_header(meta, crate::command::job::JOB_ID_HEADER_NAME, "JobId")
+}
+
+/// Extract the terminal `JobResult` from a gRPC metadata map (response header or error trailer),
+/// decoding the `x-job-result-bin` binary header. The streaming `End` trailer of the result
+/// stream carries no `ResultStatus`, so the authoritative terminal status comes from this
+/// header/trailer (or, when absent, a follow-up `find_list_by_job_id`).
+pub(crate) fn extract_job_result_from_metadata(
+    meta: &tonic::metadata::MetadataMap,
+) -> Option<crate::jobworkerp::data::JobResult> {
+    decode_bin_header(
+        meta,
+        crate::command::job::JOB_RESULT_HEADER_NAME,
+        "JobResult",
+    )
+}
+
+/// Classification of a streaming-enqueue failure (`enqueue_for_stream` returning `tonic::Status`).
+///
+/// `enqueue_for_stream` embeds the assigned `job_id` and the terminal `JobResult` in the error
+/// status metadata when a job ran and failed terminally (grpc-front create_job_error_status). A
+/// failure with no `job_id` in the metadata means the enqueue was rejected before a job was
+/// created (e.g. a NonStreaming runner rejected via `check_worker_streaming`), in which case the
+/// caller should fall back to the blocking Direct enqueue path.
+#[derive(Debug)]
+pub(crate) enum StreamEnqueueFailure {
+    /// The job reached a terminal failure; `job_id` and terminal `status`/`output` were recovered.
+    Terminal {
+        job_id: Option<JobId>,
+        status: ResultStatus,
+        output: Vec<u8>,
+    },
+    /// Enqueue was rejected before a job was created — fall back to the Direct path.
+    NotStreamable(anyhow::Error),
+}
+
+/// Classify a `tonic::Status` returned by `enqueue_for_stream`. Kept as a pure function (no I/O)
+/// so the Terminal-vs-NotStreamable decision can be unit-tested with synthetic statuses.
+pub(crate) fn classify_stream_enqueue_error(status: &tonic::Status) -> StreamEnqueueFailure {
+    // No job_id was assigned: the enqueue never created a job (e.g. NonStreaming rejection).
+    let Some(job_id) = extract_job_id_from_metadata(status.metadata()) else {
+        return StreamEnqueueFailure::NotStreamable(anyhow::anyhow!(
+            "stream enqueue rejected before job creation: {}",
+            status.message()
+        ));
+    };
+    let (status_code, output) = extract_job_result_from_metadata(status.metadata())
+        .and_then(|r| r.data)
+        .map(|d| {
+            let st = d.status();
+            let out = d.output.map(|o| o.items).unwrap_or_default();
+            (st, out)
+        })
+        .unwrap_or_else(|| {
+            (
+                ResultStatus::OtherError,
+                status.message().as_bytes().to_vec(),
+            )
+        });
+    StreamEnqueueFailure::Terminal {
+        job_id: Some(job_id),
+        status: status_code,
+        output,
+    }
+}
+
 /// Collect all output from a streaming job response and decode to JSON.
 pub async fn collect_stream_result(
     stream: &mut tonic::Streaming<ResultOutputItem>,
@@ -1725,5 +2033,107 @@ pub async fn collect_stream_result(
         decode_output_to_json(&collected, desc)
     } else {
         Ok(merge_decoded_chunks(decoded_chunks))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::job::{JOB_ID_HEADER_NAME, JOB_RESULT_HEADER_NAME};
+    use crate::jobworkerp::data::{JobResult, JobResultData};
+    use tonic::metadata::{MetadataMap, MetadataValue};
+
+    fn job_id_metadata(value: i64) -> MetadataMap {
+        let mut meta = MetadataMap::new();
+        let bytes = JobId { value }.encode_to_vec();
+        meta.insert_bin(
+            JOB_ID_HEADER_NAME,
+            MetadataValue::from_bytes(bytes.as_slice()),
+        );
+        meta
+    }
+
+    fn with_job_result(meta: &mut MetadataMap, status: ResultStatus, output: &[u8]) {
+        let result = JobResult {
+            id: None,
+            data: Some(JobResultData {
+                status: status as i32,
+                output: Some(crate::jobworkerp::data::ResultOutput {
+                    items: output.to_vec(),
+                }),
+                ..Default::default()
+            }),
+            metadata: std::collections::HashMap::new(),
+        };
+        let bytes = result.encode_to_vec();
+        meta.insert_bin(
+            JOB_RESULT_HEADER_NAME,
+            MetadataValue::from_bytes(bytes.as_slice()),
+        );
+    }
+
+    #[test]
+    fn extract_job_id_roundtrip() {
+        let meta = job_id_metadata(123);
+        assert_eq!(
+            extract_job_id_from_metadata(&meta),
+            Some(JobId { value: 123 })
+        );
+    }
+
+    #[test]
+    fn extract_job_id_absent_is_none() {
+        assert_eq!(extract_job_id_from_metadata(&MetadataMap::new()), None);
+    }
+
+    // A terminal failure carries job_id (and a JobResult) in the error status metadata: classified
+    // as Terminal so the executed job is still recorded with its terminal status.
+    #[test]
+    fn classify_terminal_failure_recovers_job_id_and_status() {
+        let mut meta = job_id_metadata(77);
+        with_job_result(&mut meta, ResultStatus::FatalError, b"boom");
+        let status = {
+            let mut s = tonic::Status::new(tonic::Code::FailedPrecondition, "fatal");
+            *s.metadata_mut() = meta;
+            s
+        };
+        match classify_stream_enqueue_error(&status) {
+            StreamEnqueueFailure::Terminal {
+                job_id,
+                status,
+                output,
+            } => {
+                assert_eq!(job_id, Some(JobId { value: 77 }));
+                assert_eq!(status, ResultStatus::FatalError);
+                assert_eq!(output, b"boom");
+            }
+            other => panic!("expected Terminal, got {other:?}"),
+        }
+    }
+
+    // No job_id in the metadata means the enqueue was rejected before a job was created
+    // (e.g. a NonStreaming runner): classified as NotStreamable so the caller falls back.
+    #[test]
+    fn classify_no_job_id_is_not_streamable() {
+        let status = tonic::Status::new(
+            tonic::Code::InvalidArgument,
+            "runner does not support streaming",
+        );
+        match classify_stream_enqueue_error(&status) {
+            StreamEnqueueFailure::NotStreamable(_) => {}
+            other => panic!("expected NotStreamable, got {other:?}"),
+        }
+    }
+
+    // The ephemeral name keeps the prefix (so it stays human-identifiable) and appends a hex
+    // suffix; successive calls must differ so concurrent executions never collide on the
+    // upsert_by_name unique key.
+    #[test]
+    fn ephemeral_worker_name_is_prefixed_and_unique() {
+        let a = ephemeral_worker_name("WORKFLOW");
+        let b = ephemeral_worker_name("WORKFLOW");
+        assert!(a.starts_with("WORKFLOW_"), "must keep the prefix: {a}");
+        assert!(b.starts_with("WORKFLOW_"));
+        assert_ne!(a, b, "successive names must be unique");
     }
 }
