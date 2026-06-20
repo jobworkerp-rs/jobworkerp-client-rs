@@ -46,6 +46,16 @@ impl From<JobworkerpClient> for JobworkerpClientWrapper {
 
 impl JobworkerpClientWrapper {
     const DEFAULT_REQUEST_TIMEOUT_SEC: u32 = 1200;
+
+    fn ensure_workflow_context_supported(desc: &prost_reflect::MessageDescriptor) -> Result<()> {
+        if desc.get_field_by_name("workflow_context").is_none() {
+            anyhow::bail!(
+                "WORKFLOW runner on this jobworkerp server does not support workflow_context; upgrade jobworkerp before using prompt context injection"
+            );
+        }
+        Ok(())
+    }
+
     pub async fn new(address: &str, request_timeout_sec: Option<u32>) -> Result<Self> {
         let jobworkerp_client = JobworkerpClient::new(
             address.to_string(),
@@ -96,11 +106,30 @@ impl JobworkerpClientWrapper {
         input: &str,
         channel: Option<&str>,
     ) -> Result<serde_json::Value> {
+        self.execute_workflow_with_context(cx, metadata, workflow_url, input, None, channel)
+            .await
+    }
+
+    pub async fn execute_workflow_with_context(
+        &self,
+        cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        workflow_url: &str,
+        input: &str,
+        workflow_context: Option<&str>,
+        channel: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let using = Some("run");
-        let job_args = json!({
+        let requires_workflow_context = workflow_context.is_some_and(|context| !context.is_empty());
+        let mut job_args = json!({
             "workflow_url": workflow_url,
             "input": input,
         });
+        if let Some(context) = workflow_context
+            && !context.is_empty()
+        {
+            job_args["workflow_context"] = json!(context);
+        }
         // Per-execution unique name so the ephemeral worker is created and deleted independently
         // of any concurrent workflow execution (see workflow_worker_params).
         let worker_name = ephemeral_worker_name(RunnerType::Workflow.as_str_name());
@@ -115,6 +144,9 @@ impl JobworkerpClientWrapper {
         {
             let args_descriptor = JobworkerpProto::parse_job_args_schema_descriptor(&sdata, using)?;
             let job_args = if let Some(desc) = args_descriptor.clone() {
+                if requires_workflow_context {
+                    Self::ensure_workflow_context_supported(&desc)?;
+                }
                 JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
             } else {
                 Ok(job_args.to_string().as_bytes().to_vec())
@@ -662,5 +694,42 @@ mod tests {
             .await
             .delete(to_request(&HashMap::new(), static_id).unwrap())
             .await;
+    }
+}
+
+#[cfg(test)]
+mod workflow_context_tests {
+    use super::JobworkerpClientWrapper;
+    use command_utils::protobuf::ProtobufDescriptor;
+
+    #[test]
+    fn workflow_context_support_check_rejects_legacy_args_schema() {
+        let proto = r#"
+        syntax = "proto3";
+        message WorkflowRunArgs {
+          string input = 3;
+        }
+        "#;
+        let descriptor = ProtobufDescriptor::new(&proto.to_string()).unwrap();
+        let msg = descriptor.get_message_by_name("WorkflowRunArgs").unwrap();
+        let err = JobworkerpClientWrapper::ensure_workflow_context_supported(&msg).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not support workflow_context")
+        );
+    }
+
+    #[test]
+    fn workflow_context_support_check_accepts_current_args_schema() {
+        let proto = r#"
+        syntax = "proto3";
+        message WorkflowRunArgs {
+          string input = 3;
+          optional string workflow_context = 4;
+        }
+        "#;
+        let descriptor = ProtobufDescriptor::new(&proto.to_string()).unwrap();
+        let msg = descriptor.get_message_by_name("WorkflowRunArgs").unwrap();
+        JobworkerpClientWrapper::ensure_workflow_context_supported(&msg).unwrap();
     }
 }
