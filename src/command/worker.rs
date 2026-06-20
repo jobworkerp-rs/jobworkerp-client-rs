@@ -148,12 +148,23 @@ pub enum QueueTypeArg {
     WithBackup,
 }
 impl QueueTypeArg {
-    fn parse(s: &str) -> Result<Self> {
+    #[allow(clippy::missing_errors_doc)]
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
             "NORMAL" => Ok(Self::Normal),
             "DB_ONLY" => Ok(Self::DbOnly),
             "WITH_BACKUP" => Ok(Self::WithBackup),
             _ => Err(anyhow!("unknown queue type: {s}")),
+        }
+    }
+
+    /// Server `WorkerOptions.QueueType` enum name expected by `normalize_enum`.
+    #[must_use]
+    pub const fn as_proto_name(&self) -> &'static str {
+        match self {
+            Self::Normal => "NORMAL",
+            Self::DbOnly => "FORCED_RDB",
+            Self::WithBackup => "WITH_BACKUP",
         }
     }
 }
@@ -170,6 +181,15 @@ impl ResponseTypeArg {
             "NO_RESULT" => Ok(Self::NoResult),
             "DIRECT" => Ok(Self::Direct),
             _ => Err(anyhow!("unknown response type: {s}")),
+        }
+    }
+
+    /// Server `WorkerOptions.ResponseType` enum name expected by `normalize_enum`.
+    #[must_use]
+    pub const fn as_proto_name(&self) -> &'static str {
+        match self {
+            Self::NoResult => "NO_RESULT",
+            Self::Direct => "DIRECT",
         }
     }
 }

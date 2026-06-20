@@ -110,6 +110,9 @@ pub enum JobCommand {
         )]
         using: Option<String>,
     },
+    // `workflow_file` (URL/path) and `workflow_data` (inline DSL) map to the
+    // server's `WorkflowRunArgs.workflow_source` oneof, so exactly one must be set.
+    #[clap(group = clap::ArgGroup::new("enqueue_workflow_source").required(true).multiple(false).args(["workflow_file", "workflow_data"]))]
     EnqueueWorkflow {
         #[clap(short, long)]
         channel: Option<String>,
@@ -124,7 +127,39 @@ pub enum JobCommand {
         #[clap(short, long)]
         timeout: Option<u64>,
         #[clap(short, long)]
-        workflow_file: String,
+        workflow_file: Option<String>,
+        #[clap(long, help = "Inline workflow definition (JSON or YAML string)")]
+        workflow_data: Option<String>,
+        #[clap(long, help = "Unique execution id for the workflow run")]
+        execution_id: Option<String>,
+        #[clap(long, value_enum, default_value = "card")]
+        format: crate::display::DisplayFormat,
+        #[clap(long)]
+        no_truncate: bool,
+    },
+    // `workflow_file` / `workflow_data` map to `CreateWorkflowArgs.workflow_source` oneof.
+    #[clap(group = clap::ArgGroup::new("create_workflow_source").required(true).multiple(false).args(["workflow_file", "workflow_data"]))]
+    CreateWorkflow {
+        #[clap(short, long, help = "Name of the worker to create from the workflow")]
+        name: String,
+        #[clap(short, long)]
+        workflow_file: Option<String>,
+        #[clap(long, help = "Inline workflow definition (JSON or YAML string)")]
+        workflow_data: Option<String>,
+        #[clap(long)]
+        context: Option<String>,
+        #[clap(short, long)]
+        channel: Option<String>,
+        #[clap(long, value_parser = crate::command::worker::QueueTypeArg::parse)]
+        queue_type: Option<crate::command::worker::QueueTypeArg>,
+        #[clap(long, value_parser = crate::command::worker::ResponseTypeArg::parse)]
+        response_type: Option<crate::command::worker::ResponseTypeArg>,
+        #[clap(long)]
+        store_success: Option<bool>,
+        #[clap(long)]
+        store_failure: Option<bool>,
+        #[clap(long)]
+        use_static: Option<bool>,
         #[clap(long, value_enum, default_value = "card")]
         format: crate::display::DisplayFormat,
         #[clap(long)]
@@ -198,6 +233,122 @@ impl JobProcessingStatusArg {
             Self::Cancelling => JobProcessingStatus::Cancelling,
         }
     }
+}
+
+/// Build the WORKFLOW runner `run` job_args JSON from CLI inputs.
+///
+/// Why pure: keeps descriptor/gRPC plumbing out so the JSON shaping
+/// (the `workflow_source` oneof and optional fields) is unit-testable
+/// without a running server.
+fn build_workflow_run_args_json(
+    workflow_file: Option<&str>,
+    workflow_data: Option<&str>,
+    input: &str,
+    context: Option<&str>,
+    execution_id: Option<&str>,
+) -> Result<serde_json::Value> {
+    let mut job_args = serde_json::json!({ "input": input });
+    set_workflow_source(&mut job_args, workflow_file, workflow_data)?;
+    if let Some(ctx) = context.filter(|c| !c.is_empty()) {
+        job_args["workflow_context"] = serde_json::json!(ctx);
+    }
+    if let Some(eid) = execution_id.filter(|e| !e.is_empty()) {
+        job_args["execution_id"] = serde_json::json!(eid);
+    }
+    Ok(job_args)
+}
+
+/// Build the WORKFLOW runner `create` job_args JSON (CreateWorkflowArgs).
+fn build_create_workflow_args_json(
+    name: &str,
+    workflow_file: Option<&str>,
+    workflow_data: Option<&str>,
+    context: Option<&str>,
+    worker_options: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let mut args = serde_json::json!({ "name": name });
+    set_workflow_source(&mut args, workflow_file, workflow_data)?;
+    if let Some(ctx) = context.filter(|c| !c.is_empty()) {
+        args["workflow_context"] = serde_json::json!(ctx);
+    }
+    if worker_options.as_object().is_some_and(|m| !m.is_empty()) {
+        args["worker_options"] = worker_options;
+    }
+    Ok(args)
+}
+
+/// Set the `workflow_source` oneof; exactly one of file/data must be present.
+fn set_workflow_source(
+    target: &mut serde_json::Value,
+    workflow_file: Option<&str>,
+    workflow_data: Option<&str>,
+) -> Result<()> {
+    match (workflow_file, workflow_data) {
+        (Some(f), None) => target["workflow_url"] = serde_json::json!(f),
+        // workflow_data carries the inline DSL (JSON/YAML) string.
+        (None, Some(d)) => target["workflow_data"] = serde_json::json!(d),
+        _ => anyhow::bail!("exactly one of workflow_file / workflow_data must be set"),
+    }
+    Ok(())
+}
+
+/// Build the `worker_options` object for CreateWorkflowArgs.
+///
+/// Only set keys are emitted so the server applies its own defaults for the
+/// rest. Enum values use their proto names for `normalize_enum` conversion.
+fn build_worker_options_json(
+    channel: Option<&str>,
+    queue_type: Option<&crate::command::worker::QueueTypeArg>,
+    response_type: Option<&crate::command::worker::ResponseTypeArg>,
+    store_success: Option<bool>,
+    store_failure: Option<bool>,
+    use_static: Option<bool>,
+) -> serde_json::Value {
+    let mut opts = serde_json::Map::new();
+    if let Some(c) = channel.filter(|c| !c.is_empty()) {
+        opts.insert("channel".into(), serde_json::json!(c));
+    }
+    if let Some(q) = queue_type {
+        opts.insert("queue_type".into(), serde_json::json!(q.as_proto_name()));
+    }
+    if let Some(r) = response_type {
+        opts.insert("response_type".into(), serde_json::json!(r.as_proto_name()));
+    }
+    if let Some(v) = store_success {
+        opts.insert("store_success".into(), serde_json::json!(v));
+    }
+    if let Some(v) = store_failure {
+        opts.insert("store_failure".into(), serde_json::json!(v));
+    }
+    if let Some(v) = use_static {
+        opts.insert("use_static".into(), serde_json::json!(v));
+    }
+    serde_json::Value::Object(opts)
+}
+
+/// Extract the created worker id from a decoded `CreateWorkflowResult` JSON.
+///
+/// The result message has no static Rust type on the client (proto is fetched
+/// dynamically), and the field name has varied across server versions, so we
+/// probe the known candidate shapes rather than depend on one layout.
+fn extract_worker_id_from_create_result(json: &serde_json::Value) -> Option<i64> {
+    fn as_i64(v: &serde_json::Value) -> Option<i64> {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+    }
+    for key in ["worker_id", "workerId", "id"] {
+        if let Some(field) = json.get(key) {
+            // Wrapper form `{ "worker_id": { "value": 42 } }` or scalar `{ "worker_id": 42 }`.
+            if let Some(id) = field
+                .get("value")
+                .and_then(as_i64)
+                .or_else(|| as_i64(field))
+            {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 impl JobCommand {
@@ -393,6 +544,8 @@ impl JobCommand {
                 run_after_time,
                 timeout,
                 workflow_file,
+                workflow_data,
+                execution_id,
                 format,
                 no_truncate,
             } => {
@@ -441,16 +594,19 @@ impl JobCommand {
                             })
                             .unwrap()
                     {
-                        let mut job_args = serde_json::json!({
-                            "workflow_url": serde_json::Value::String(workflow_file.clone()),
-                            "input": serde_json::Value::String(input.clone()),
-                        });
-                        if let Some(ctx) = context.as_deref()
-                            && !ctx.is_empty()
-                        {
-                            job_args["workflow_context"] =
-                                serde_json::Value::String(ctx.to_string());
-                        }
+                        let job_args = match build_workflow_run_args_json(
+                            workflow_file.as_deref(),
+                            workflow_data.as_deref(),
+                            input,
+                            context.as_deref(),
+                            execution_id.as_deref(),
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("Invalid workflow arguments: {e:#}");
+                                return;
+                            }
+                        };
                         JobworkerpProto::json_value_to_message(
                             args_descriptor,
                             &job_args,
@@ -594,6 +750,175 @@ impl JobCommand {
                 } else {
                     println!("runner {} not found", RunnerType::Workflow.as_str_name());
                     return;
+                }
+            }
+            Self::CreateWorkflow {
+                name,
+                workflow_file,
+                workflow_data,
+                context,
+                channel,
+                queue_type,
+                response_type,
+                store_success,
+                store_failure,
+                use_static,
+                format,
+                no_truncate,
+            } => {
+                let helper = JobCommandHelper::new(client.clone());
+                let (_span, cx) =
+                    self.create_parent_span("jobworkerp-client", "JobCommand::CreateWorkflow");
+                let cx = Some(cx);
+
+                let using = Some("create");
+                let runner = match helper
+                    .find_runner_by_name(
+                        cx.as_ref(),
+                        metadata.clone(),
+                        RunnerType::Workflow.as_str_name(),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Failed to find WORKFLOW runner: {e:#}");
+                        return;
+                    }
+                };
+                let Some(Runner {
+                    id: Some(rid),
+                    data: Some(rdata),
+                }) = runner
+                else {
+                    println!("runner {} not found", RunnerType::Workflow.as_str_name());
+                    return;
+                };
+
+                // Build CreateWorkflowArgs JSON, then encode against the
+                // dynamically fetched `create` method args descriptor.
+                let worker_options = build_worker_options_json(
+                    channel.as_deref(),
+                    queue_type.as_ref(),
+                    response_type.as_ref(),
+                    *store_success,
+                    *store_failure,
+                    *use_static,
+                );
+                let job_args = match build_create_workflow_args_json(
+                    name,
+                    workflow_file.as_deref(),
+                    workflow_data.as_deref(),
+                    context.as_deref(),
+                    worker_options,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("Invalid workflow arguments: {e:#}");
+                        return;
+                    }
+                };
+                let Some(args_descriptor) =
+                    JobworkerpProto::parse_job_args_schema_descriptor(&rdata, using)
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to parse job_args schema descriptor: {e:#?}");
+                            None
+                        })
+                else {
+                    println!("args_descriptor not found");
+                    return;
+                };
+                let args = match JobworkerpProto::json_value_to_message(
+                    args_descriptor,
+                    &job_args,
+                    true,
+                    true,
+                ) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("Failed to encode CreateWorkflowArgs: {e:#?}");
+                        return;
+                    }
+                };
+                let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to parse result schema descriptor: {e:#?}");
+                        None
+                    });
+
+                // `create` is non-streaming: enqueue via an ephemeral worker and
+                // collect a single output, then clean the temp worker up.
+                let wname =
+                    crate::client::helper::ephemeral_worker_name("JobworkerpClientWorkflowCreate");
+                let worker_data = WorkerData {
+                    name: wname.clone(),
+                    runner_id: Some(rid),
+                    runner_settings: vec![],
+                    retry_policy: None,
+                    channel: None,
+                    queue_type: QueueType::Normal as i32,
+                    response_type: ResponseType::Direct as i32,
+                    store_success: false,
+                    store_failure: false,
+                    broadcast_results: false,
+                    use_static: false,
+                    ..Default::default()
+                };
+                let output = helper
+                    .enqueue_and_get_output_worker_job(
+                        cx.as_ref(),
+                        metadata.clone(),
+                        &worker_data,
+                        args,
+                        3600,
+                        None,
+                        None,
+                        using,
+                    )
+                    .await;
+                let _ = helper
+                    .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
+                    .await;
+
+                let output = match output {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("Workflow worker creation failed: {e:#}");
+                        return;
+                    }
+                };
+
+                // Decode the CreateWorkflowResult and surface the created worker id.
+                let result_json = result_desc.as_ref().and_then(|desc| {
+                    ProtobufDescriptor::get_message_from_bytes(desc.clone(), &output)
+                        .and_then(|m| ProtobufDescriptor::message_to_json_value(&m))
+                        .ok()
+                });
+                let worker_id = result_json
+                    .as_ref()
+                    .and_then(extract_worker_id_from_create_result);
+
+                let display_options = crate::display::DisplayOptions {
+                    format: *format,
+                    color_enabled: true,
+                    max_field_length: None,
+                    use_unicode: true,
+                    no_truncate: *no_truncate,
+                };
+                match worker_id {
+                    Some(id) => {
+                        let row = serde_json::json!({ "worker_id": id, "name": name });
+                        println!(
+                            "{}",
+                            crate::display::visualize_rows(&[row], &display_options)
+                        );
+                    }
+                    None => {
+                        eprintln!(
+                            "Worker created but worker id could not be parsed from result: {:?}",
+                            result_json
+                        );
+                    }
                 }
             }
 
@@ -852,3 +1177,256 @@ impl UseJobworkerpClient for JobCommandHelper {
 }
 impl UseJobworkerpClientHelper for JobCommandHelper {}
 impl Tracing for JobCommandHelper {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use serde_json::json;
+
+    #[derive(Parser, Debug)]
+    struct TestRoot {
+        #[clap(subcommand)]
+        cmd: JobCommand,
+    }
+
+    // --- clap parse tests: EnqueueWorkflow workflow_source exclusivity ---
+
+    #[test]
+    fn enqueue_workflow_accepts_workflow_file() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--input",
+            "{}",
+        ]);
+        match parsed.cmd {
+            JobCommand::EnqueueWorkflow {
+                workflow_file,
+                workflow_data,
+                ..
+            } => {
+                assert_eq!(workflow_file.as_deref(), Some("wf.yaml"));
+                assert!(workflow_data.is_none());
+            }
+            other => panic!("expected EnqueueWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enqueue_workflow_accepts_workflow_data_and_execution_id() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-data",
+            "do: []",
+            "--input",
+            "{}",
+            "--execution-id",
+            "exec-1",
+        ]);
+        match parsed.cmd {
+            JobCommand::EnqueueWorkflow {
+                workflow_file,
+                workflow_data,
+                execution_id,
+                ..
+            } => {
+                assert!(workflow_file.is_none());
+                assert_eq!(workflow_data.as_deref(), Some("do: []"));
+                assert_eq!(execution_id.as_deref(), Some("exec-1"));
+            }
+            other => panic!("expected EnqueueWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enqueue_workflow_rejects_both_sources() {
+        let res = TestRoot::try_parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--workflow-data",
+            "do: []",
+            "--input",
+            "{}",
+        ]);
+        assert!(res.is_err(), "both sources must be rejected");
+    }
+
+    #[test]
+    fn enqueue_workflow_rejects_missing_source() {
+        let res = TestRoot::try_parse_from(["test", "enqueue-workflow", "--input", "{}"]);
+        assert!(res.is_err(), "missing source must be rejected");
+    }
+
+    // --- clap parse tests: CreateWorkflow ---
+
+    #[test]
+    fn create_workflow_parses_with_defaults() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "create-workflow",
+            "--name",
+            "my-wf",
+            "--workflow-file",
+            "wf.yaml",
+        ]);
+        match parsed.cmd {
+            JobCommand::CreateWorkflow {
+                name,
+                workflow_file,
+                queue_type,
+                response_type,
+                ..
+            } => {
+                assert_eq!(name, "my-wf");
+                assert_eq!(workflow_file.as_deref(), Some("wf.yaml"));
+                assert!(queue_type.is_none());
+                assert!(response_type.is_none());
+            }
+            other => panic!("expected CreateWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_workflow_rejects_invalid_response_type() {
+        let res = TestRoot::try_parse_from([
+            "test",
+            "create-workflow",
+            "--name",
+            "my-wf",
+            "--workflow-file",
+            "wf.yaml",
+            "--response-type",
+            "BOGUS",
+        ]);
+        assert!(res.is_err(), "invalid response type must be rejected");
+    }
+
+    // --- pure function tests: build_workflow_run_args_json ---
+
+    #[test]
+    fn run_args_uses_workflow_url_for_file() {
+        let v = build_workflow_run_args_json(Some("wf.yaml"), None, "{}", None, None).unwrap();
+        assert_eq!(v["workflow_url"], json!("wf.yaml"));
+        assert!(v.get("workflow_data").is_none());
+        assert_eq!(v["input"], json!("{}"));
+    }
+
+    #[test]
+    fn run_args_uses_workflow_data_for_inline() {
+        let v = build_workflow_run_args_json(None, Some("do: []"), "{}", None, None).unwrap();
+        assert_eq!(v["workflow_data"], json!("do: []"));
+        assert!(v.get("workflow_url").is_none());
+    }
+
+    #[test]
+    fn run_args_omits_empty_context_and_execution_id() {
+        let v = build_workflow_run_args_json(Some("wf"), None, "{}", Some(""), Some("")).unwrap();
+        assert!(v.get("workflow_context").is_none());
+        assert!(v.get("execution_id").is_none());
+    }
+
+    #[test]
+    fn run_args_includes_context_and_execution_id() {
+        let v =
+            build_workflow_run_args_json(Some("wf"), None, "{}", Some("ctx"), Some("e1")).unwrap();
+        assert_eq!(v["workflow_context"], json!("ctx"));
+        assert_eq!(v["execution_id"], json!("e1"));
+    }
+
+    #[test]
+    fn run_args_rejects_both_or_neither_sources() {
+        assert!(build_workflow_run_args_json(Some("a"), Some("b"), "{}", None, None).is_err());
+        assert!(build_workflow_run_args_json(None, None, "{}", None, None).is_err());
+    }
+
+    // --- pure function tests: build_worker_options_json ---
+
+    #[test]
+    fn worker_options_empty_when_all_none() {
+        let v = build_worker_options_json(None, None, None, None, None, None);
+        assert!(v.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn worker_options_includes_only_set_keys_with_enum_names() {
+        use crate::command::worker::{QueueTypeArg, ResponseTypeArg};
+        let v = build_worker_options_json(
+            Some("ch1"),
+            Some(&QueueTypeArg::DbOnly),
+            Some(&ResponseTypeArg::Direct),
+            Some(true),
+            None,
+            None,
+        );
+        assert_eq!(v["channel"], json!("ch1"));
+        // DbOnly maps to the server's FORCED_RDB enum name.
+        assert_eq!(v["queue_type"], json!("FORCED_RDB"));
+        assert_eq!(v["response_type"], json!("DIRECT"));
+        assert_eq!(v["store_success"], json!(true));
+        assert!(v.get("store_failure").is_none());
+        assert!(v.get("use_static").is_none());
+    }
+
+    // --- pure function tests: build_create_workflow_args_json ---
+
+    #[test]
+    fn create_args_shapes_name_and_source_and_options() {
+        let opts = build_worker_options_json(Some("ch"), None, None, None, None, None);
+        let v = build_create_workflow_args_json("wname", Some("wf.yaml"), None, Some("ctx"), opts)
+            .unwrap();
+        assert_eq!(v["name"], json!("wname"));
+        assert_eq!(v["workflow_url"], json!("wf.yaml"));
+        assert_eq!(v["workflow_context"], json!("ctx"));
+        assert_eq!(v["worker_options"]["channel"], json!("ch"));
+    }
+
+    #[test]
+    fn create_args_omits_worker_options_when_empty() {
+        let opts = build_worker_options_json(None, None, None, None, None, None);
+        let v = build_create_workflow_args_json("w", None, Some("do: []"), None, opts).unwrap();
+        assert!(v.get("worker_options").is_none());
+        assert_eq!(v["workflow_data"], json!("do: []"));
+    }
+
+    // --- pure function tests: extract_worker_id_from_create_result ---
+
+    #[test]
+    fn extract_worker_id_wrapper_form() {
+        let v = json!({ "worker_id": { "value": 42 } });
+        assert_eq!(extract_worker_id_from_create_result(&v), Some(42));
+    }
+
+    #[test]
+    fn extract_worker_id_camel_and_id_fallbacks() {
+        assert_eq!(
+            extract_worker_id_from_create_result(&json!({ "workerId": { "value": 7 } })),
+            Some(7)
+        );
+        assert_eq!(
+            extract_worker_id_from_create_result(&json!({ "id": { "value": 9 } })),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn extract_worker_id_scalar_form() {
+        assert_eq!(
+            extract_worker_id_from_create_result(&json!({ "worker_id": 99 })),
+            Some(99)
+        );
+    }
+
+    #[test]
+    fn extract_worker_id_missing_returns_none() {
+        assert_eq!(
+            extract_worker_id_from_create_result(&json!({ "other": 1 })),
+            None
+        );
+    }
+}
