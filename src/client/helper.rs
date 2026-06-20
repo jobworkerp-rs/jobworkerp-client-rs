@@ -74,6 +74,27 @@ pub(crate) fn ephemeral_worker_name(prefix: &str) -> String {
     format!("{prefix}_{:x}", hasher.finish())
 }
 
+fn workflow_context_is_present(job_args: &serde_json::Value) -> bool {
+    job_args
+        .get("workflow_context")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|v| !v.is_empty())
+}
+
+fn ensure_workflow_context_field(
+    desc: &MessageDescriptor,
+    job_args: &serde_json::Value,
+) -> Result<()> {
+    if workflow_context_is_present(job_args) && desc.get_field_by_name("workflow_context").is_none()
+    {
+        return Err(ClientError::ParseError(
+            "WORKFLOW runner on this jobworkerp server does not support workflow_context; upgrade jobworkerp before using workflow context injection".to_string(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Build `WorkerData` with default settings from runner
 fn build_worker_data_default(
     name: &str,
@@ -1405,10 +1426,16 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             };
             tracing::trace!("job args: {:#?}", &job_args);
             let job_args_bytes = match args_descriptor {
-                Some(desc) => JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
-                    .map_err(|e| {
-                    ClientError::ParseError(format!("Failed to parse job_args schema: {e:#?}"))
-                })?,
+                Some(desc) => {
+                    ensure_workflow_context_field(&desc, &job_args)?;
+                    JobworkerpProto::json_value_to_message(desc, &job_args, true, true).map_err(
+                        |e| {
+                            ClientError::ParseError(format!(
+                                "Failed to parse job_args schema: {e:#?}"
+                            ))
+                        },
+                    )?
+                }
                 _ => serde_json::to_string(&job_args)
                     .map_err(|e| {
                         ClientError::ParseError(format!("Failed to serialize job_args: {e:#?}"))
@@ -1501,6 +1528,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor {
                     Some(desc) => {
+                        ensure_workflow_context_field(&desc, &job_args)?;
                         JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
                             .map_err(|e| {
                                 ClientError::ParseError(format!(
@@ -1779,6 +1807,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 tracing::trace!("job args (json): {:#?}", &job_args);
                 let job_args_bytes = match args_descriptor {
                     Some(desc) => {
+                        ensure_workflow_context_field(&desc, &job_args)?;
                         JobworkerpProto::json_value_to_message(desc, &job_args, true, true)
                             .map_err(|e| {
                                 ClientError::ParseError(format!(
@@ -2135,5 +2164,71 @@ mod tests {
         assert!(a.starts_with("WORKFLOW_"), "must keep the prefix: {a}");
         assert!(b.starts_with("WORKFLOW_"));
         assert_ne!(a, b, "successive names must be unique");
+    }
+}
+
+#[cfg(test)]
+mod workflow_context_schema_tests {
+    use super::ensure_workflow_context_field;
+    use command_utils::protobuf::ProtobufDescriptor;
+    use serde_json::json;
+
+    fn descriptor(proto: &str) -> prost_reflect::MessageDescriptor {
+        ProtobufDescriptor::new(&proto.to_string())
+            .unwrap()
+            .get_message_by_name("WorkflowRunArgs")
+            .unwrap()
+    }
+
+    #[test]
+    fn rejects_context_when_args_schema_has_no_workflow_context_field() {
+        let desc = descriptor(
+            r#"
+            syntax = "proto3";
+            message WorkflowRunArgs {
+              string input = 1;
+            }
+            "#,
+        );
+        let err = ensure_workflow_context_field(
+            &desc,
+            &json!({"input":"{}","workflow_context":"{\"prompt_source\":\"embedded_context\"}"}),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not support workflow_context")
+        );
+    }
+
+    #[test]
+    fn accepts_context_when_args_schema_has_workflow_context_field() {
+        let desc = descriptor(
+            r#"
+            syntax = "proto3";
+            message WorkflowRunArgs {
+              string input = 1;
+              optional string workflow_context = 4;
+            }
+            "#,
+        );
+        ensure_workflow_context_field(
+            &desc,
+            &json!({"input":"{}","workflow_context":"{\"prompt_source\":\"embedded_context\"}"}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn accepts_legacy_schema_when_context_is_absent() {
+        let desc = descriptor(
+            r#"
+            syntax = "proto3";
+            message WorkflowRunArgs {
+              string input = 1;
+            }
+            "#,
+        );
+        ensure_workflow_context_field(&desc, &json!({"input":"{}"})).unwrap();
     }
 }
