@@ -1998,10 +1998,41 @@ pub(crate) fn classify_stream_enqueue_error(status: &tonic::Status) -> StreamEnq
     }
 }
 
+/// Strategy used to merge multiple descriptor-decoded streaming chunks. The right choice depends
+/// on the runner's streaming semantics:
+///
+/// - `Concat` — chunks carry incremental deltas (LLM streaming, where each chunk holds a slice of
+///   the eventual output). Strings are concatenated, arrays extended, objects merged recursively.
+/// - `LastWins` — each chunk is a complete snapshot of the current terminal state (the WORKFLOW
+///   runner sends a fresh `WorkflowResult` per state transition). Only the final snapshot is
+///   meaningful, so we keep just the last one.
+///
+/// Picking the wrong strategy silently corrupts the output (e.g. WorkflowResult.status under
+/// `Concat` becomes `"RunningRunning...Faulted"` instead of `"Faulted"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamChunkMerge {
+    Concat,
+    LastWins,
+}
+
 /// Collect all output from a streaming job response and decode to JSON.
+///
+/// Uses `Concat` semantics — appropriate for LLM-style delta streams. Use
+/// [`collect_stream_result_with`] when the runner sends complete snapshots per chunk (e.g.
+/// WORKFLOW) and only the last chunk should be retained.
 pub async fn collect_stream_result(
     stream: &mut tonic::Streaming<ResultOutputItem>,
     result_descriptor: Option<&MessageDescriptor>,
+) -> Result<serde_json::Value> {
+    collect_stream_result_with(stream, result_descriptor, StreamChunkMerge::Concat).await
+}
+
+/// Collect streaming output with the explicit chunk merge semantics. See [`StreamChunkMerge`] for
+/// when to choose each variant.
+pub async fn collect_stream_result_with(
+    stream: &mut tonic::Streaming<ResultOutputItem>,
+    result_descriptor: Option<&MessageDescriptor>,
+    merge: StreamChunkMerge,
 ) -> Result<serde_json::Value> {
     let mut collected: Vec<u8> = Vec::new();
     // When result_descriptor is present, each Data chunk is an independent
@@ -2021,7 +2052,15 @@ pub async fn collect_stream_result(
                     tracing::warn!("Received Data chunk after FinalCollected, ignoring");
                     continue;
                 }
-                // Always accumulate raw bytes for fallback
+                // LastWins: each chunk is a complete snapshot, so only the latest one matters.
+                // Reset raw / decoded buffers to the current chunk so the fallback path also
+                // returns just the last snapshot rather than a concatenation.
+                if merge == StreamChunkMerge::LastWins {
+                    collected.clear();
+                    decoded_chunks.clear();
+                }
+                // Always accumulate raw bytes for fallback (Concat) or hold just this chunk
+                // (LastWins, after the clear above).
                 collected.extend_from_slice(&data);
                 if has_descriptor {
                     // Decode each chunk independently
@@ -2061,7 +2100,26 @@ pub async fn collect_stream_result(
         };
         decode_output_to_json(&collected, desc)
     } else {
-        Ok(merge_decoded_chunks(decoded_chunks))
+        Ok(combine_decoded_chunks(decoded_chunks, merge))
+    }
+}
+
+/// Reduce a sequence of descriptor-decoded streaming chunks to the single value the caller should
+/// observe, picking the strategy by `merge`. Split out so it can be exercised directly in unit
+/// tests without standing up a `tonic::Streaming`.
+fn combine_decoded_chunks(
+    chunks: Vec<serde_json::Value>,
+    merge: StreamChunkMerge,
+) -> serde_json::Value {
+    match merge {
+        StreamChunkMerge::Concat => merge_decoded_chunks(chunks),
+        // For snapshot-style streams (WORKFLOW): keep only the final chunk. Earlier intermediate
+        // snapshots are stale state transitions we must not blend into the terminal value
+        // (otherwise WorkflowResult.status concatenates as "RunningRunningFaulted").
+        StreamChunkMerge::LastWins => chunks
+            .into_iter()
+            .next_back()
+            .unwrap_or(serde_json::Value::Null),
     }
 }
 
@@ -2164,6 +2222,61 @@ mod tests {
         assert!(a.starts_with("WORKFLOW_"), "must keep the prefix: {a}");
         assert!(b.starts_with("WORKFLOW_"));
         assert_ne!(a, b, "successive names must be unique");
+    }
+
+    // Regression: WORKFLOW runner streams a fresh snapshot per state transition. Picking the LLM
+    // delta-merge by mistake produces values like status="RunningRunningFaulted" — the exact
+    // breakage observed in production. LastWins must reduce the sequence to the final chunk so
+    // the downstream WorkflowResult.status check sees `Faulted` (not a concatenation).
+    #[test]
+    fn combine_decoded_chunks_last_wins_keeps_final_workflow_snapshot() {
+        let chunks = vec![
+            serde_json::json!({"status": "Running", "errorMessage": ""}),
+            serde_json::json!({"status": "Running", "errorMessage": ""}),
+            serde_json::json!({"status": "Faulted", "errorMessage": "boom"}),
+        ];
+        let out = combine_decoded_chunks(chunks, StreamChunkMerge::LastWins);
+        assert_eq!(
+            out,
+            serde_json::json!({"status": "Faulted", "errorMessage": "boom"})
+        );
+    }
+
+    // LLM delta semantics must remain untouched: string fields are concatenated, arrays extended.
+    #[test]
+    fn combine_decoded_chunks_concat_appends_strings() {
+        let chunks = vec![
+            serde_json::json!({"text": "Hel"}),
+            serde_json::json!({"text": "lo"}),
+            serde_json::json!({"text": "!"}),
+        ];
+        let out = combine_decoded_chunks(chunks, StreamChunkMerge::Concat);
+        assert_eq!(out, serde_json::json!({"text": "Hello!"}));
+    }
+
+    // Defensive: an empty chunk sequence under either strategy must not panic and should resolve
+    // to JSON Null (callers downstream then see "no signal").
+    #[test]
+    fn combine_decoded_chunks_empty_is_null_for_both_strategies() {
+        for merge in [StreamChunkMerge::LastWins, StreamChunkMerge::Concat] {
+            let out = combine_decoded_chunks(vec![], merge);
+            assert_eq!(out, serde_json::Value::Null, "merge={merge:?}");
+        }
+    }
+
+    // Single chunk must be returned as-is regardless of strategy — historically merge_decoded_chunks
+    // short-circuits the 1-element case, and LastWins must agree.
+    #[test]
+    fn combine_decoded_chunks_single_chunk_is_passthrough() {
+        let one = serde_json::json!({"status": "Completed", "output": "{}"});
+        assert_eq!(
+            combine_decoded_chunks(vec![one.clone()], StreamChunkMerge::LastWins),
+            one
+        );
+        assert_eq!(
+            combine_decoded_chunks(vec![one.clone()], StreamChunkMerge::Concat),
+            one
+        );
     }
 }
 
