@@ -2,7 +2,7 @@
 
 The `jobworkerp_client::client::worker_yaml` module provides a generic library facility for loading jobworkerp Worker definitions from YAML files and upserting them to a jobworkerp server through `UseJobworkerpClientHelper::upsert_worker`.
 
-By consolidating each `WorkerData` field and the (arbitrary-proto) `runner_settings` into a single YAML file, worker registration logic that used to be hard-coded in Rust can be expressed declaratively. For an end-to-end usage example, see `memories/docs/yaml-workers.md` in the parent repository.
+By consolidating each `WorkerData` field and the (arbitrary-proto) `runner_settings` into a single YAML file, worker registration logic that used to be hard-coded in Rust can be expressed declaratively.
 
 ## API
 
@@ -291,4 +291,3 @@ When several workers share the same `runner:`, the lookup is cached per name so 
 
 - Implementation: `src/client/worker_yaml.rs`
 - Trait method facade: `src/client/helper.rs::UseJobworkerpClientHelper::register_worker`
-- Usage example: `memories/docs/yaml-workers.md` and `memories/workflows/auto-embedding-workers.yaml`

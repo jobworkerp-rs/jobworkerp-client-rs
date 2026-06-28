@@ -157,4 +157,4 @@ Library-side errors (YAML syntax, target typos, name lookup failures, …) there
 - Implementation: `src/client/function_set_yaml.rs`
 - Shared YAML preprocessing: `src/client/yaml_common.rs` (also used by `worker_yaml`)
 - Trait method facades: `src/client/helper.rs::UseJobworkerpClientHelper::{find_function_set_by_name, upsert_function_set_by_name, register_function_sets_from_yaml}`
-- Worker counterpart: `docs/worker-yaml.md`
+- Worker counterpart: `worker-yaml.md`
