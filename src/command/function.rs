@@ -517,14 +517,14 @@ impl FunctionCommand {
         function.worker_id.as_ref().inspect(|worker_id| {
             println!("\t[worker_id] {}", worker_id.value);
         });
-        println!("\t[name] {}", &function.name);
-        println!("\t[description] {}", &function.description);
+        println!("\t[name] {}", function.name);
+        println!("\t[description] {}", function.description);
 
         // Print settings schema
         if function.settings_schema.is_empty() {
             println!("\t[settings_schema] (None)");
         } else {
-            println!("\t[settings_schema] |\n---\n{}", &function.settings_schema);
+            println!("\t[settings_schema] |\n---\n{}", function.settings_schema);
         }
 
         // Print methods
@@ -542,7 +542,7 @@ impl FunctionCommand {
 
                 println!(
                     "\t\t[arguments_schema] |\n---\n{}",
-                    &method_schema.arguments_schema
+                    method_schema.arguments_schema
                 );
 
                 if let Some(result_schema) = &method_schema.result_schema {
@@ -606,7 +606,7 @@ impl FunctionCommand {
 
     pub fn print_function_result(result: &FunctionResult) {
         println!("[function_result]:");
-        println!("\t[output] {}", &result.output);
+        println!("\t[output] {}", result.output);
 
         if let Some(status) = &result.status {
             println!("\t[status] {status:?}");
@@ -622,8 +622,8 @@ impl FunctionCommand {
 
         if let Some(last_info) = &result.last_info {
             println!("\t[execution_info]:");
-            println!("\t\t[job_id] {}", &last_info.job_id);
-            println!("\t\t[started_at] {}", &last_info.started_at);
+            println!("\t\t[job_id] {}", last_info.job_id);
+            println!("\t\t[started_at] {}", last_info.started_at);
             if let Some(completed_at) = &last_info.completed_at {
                 println!("\t\t[completed_at] {completed_at}");
             }
@@ -631,7 +631,7 @@ impl FunctionCommand {
                 println!("\t\t[execution_time_ms] {execution_time_ms}");
             }
             if !last_info.metadata.is_empty() {
-                println!("\t\t[metadata] {:#?}", &last_info.metadata);
+                println!("\t\t[metadata] {:#?}", last_info.metadata);
             }
         }
     }

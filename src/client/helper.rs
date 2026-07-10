@@ -1562,7 +1562,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             } else {
                 Err(ClientError::NotFound(format!(
                     "runner not found with id: {:?} for worker: {}",
-                    runner_id, &worker_data.name
+                    runner_id, worker_data.name
                 ))
                 .into())
             }
@@ -1597,7 +1597,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 .ok_or_else(|| {
                     ClientError::NotFound(format!(
                         "runner not found with id: {:?} for worker: {}",
-                        runner_id, &worker_data.name
+                        runner_id, worker_data.name
                     ))
                 })?;
             let rdata = runner.data.ok_or_else(|| {
@@ -1852,7 +1852,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             } else {
                 Err(ClientError::NotFound(format!(
                     "runner not found with id: {:?} for worker: {}",
-                    runner_id, &worker_data.name
+                    runner_id, worker_data.name
                 ))
                 .into())
             }

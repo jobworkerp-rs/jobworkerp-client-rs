@@ -254,13 +254,13 @@ impl RunnerCommand {
             data: Some(data),
         } = runner
         {
-            println!("[runner]:\n\t[id] {}", &rid.value);
-            println!("\t[name] {}", &data.name);
-            println!("\t[description] {}", &data.description);
-            println!("\t[runner_type] {}", &data.runner_type().as_str_name());
+            println!("[runner]:\n\t[id] {}", rid.value);
+            println!("\t[name] {}", data.name);
+            println!("\t[description] {}", data.description);
+            println!("\t[runner_type] {}", data.runner_type().as_str_name());
             println!(
                 "\t[runner_settings_proto] |\n---\n{}",
-                &data.runner_settings_proto
+                data.runner_settings_proto
             );
             if let Some(method_map) = &data.method_proto_map {
                 println!("\t[methods] {} available", method_map.schemas.len());
@@ -269,8 +269,8 @@ impl RunnerCommand {
                     if let Some(desc) = &schema.description {
                         println!("\t\t\t[description] {desc}");
                     }
-                    println!("\t\t\t[args_proto] |\n{}", &schema.args_proto);
-                    println!("\t\t\t[result_proto] |\n{}", &schema.result_proto);
+                    println!("\t\t\t[args_proto] |\n{}", schema.args_proto);
+                    println!("\t\t\t[result_proto] |\n{}", schema.result_proto);
                     println!("\t\t\t[output_type] {}", schema.output_type().as_str_name());
                 }
             } else {

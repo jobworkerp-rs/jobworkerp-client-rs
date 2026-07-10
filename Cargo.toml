@@ -13,7 +13,7 @@ path = "src/bin/command.rs"
 anyhow = "1"
 atty = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 comfy-table = "7.2"
 yansi = "1.0"
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
@@ -42,7 +42,7 @@ regex = { version = "1" }
 thiserror = { version = "2" }
 tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = { version = "0.14" }
-tokio = { version = "=1", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 # V2 plugin ABI definitions are shared with jobworkerp-rs through the
 # `jobworkerp-plugin-abi` crate. In production this resolves via the

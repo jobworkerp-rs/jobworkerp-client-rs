@@ -151,7 +151,7 @@ impl JobworkerpProto {
         .into_inner()
         .data
         .and_then(|r| r.data.and_then(|r| r.runner_id))
-        .ok_or_else(|| anyhow::anyhow!("runner not found: worker: {:?}", &worker))?;
+        .ok_or_else(|| anyhow::anyhow!("runner not found: worker: {:?}", worker))?;
         Self::find_runner_descriptors(client, runner_id, using).await
     }
     pub fn json_value_to_message(

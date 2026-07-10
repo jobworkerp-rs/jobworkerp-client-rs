@@ -614,7 +614,7 @@ impl JobCommand {
                             true,
                         )
                         .map_err(|e| {
-                            println!("Failed to parse job_args schema: {:#?}", &e);
+                            println!("Failed to parse job_args schema: {:#?}", e);
                             anyhow::anyhow!("Failed to parse job_args schema: {e:#?}")
                         })
                         .unwrap()
@@ -1115,9 +1115,9 @@ impl JobCommand {
                 metadata: _,
             } = job
             {
-                println!("[job]:\n\t[id] {}", &jid.value);
+                println!("[job]:\n\t[id] {}", jid.value);
                 if let Some(wid) = jdat.worker_id {
-                    println!("\t[worker_id] {}", &wid.value);
+                    println!("\t[worker_id] {}", wid.value);
                     let using_ref = jdat.using.as_deref();
                     match JobworkerpProto::find_runner_descriptors_by_worker(
                         client,
@@ -1144,13 +1144,13 @@ impl JobCommand {
                             println!("\t[args (ERROR)]  {e:?}");
                         }
                     }
-                    println!("\t[uniq_key] {:?}", &jdat.uniq_key);
+                    println!("\t[uniq_key] {:?}", jdat.uniq_key);
                     println!(
                         "\t[run_after_time] {}",
                         DateTime::from_timestamp_millis(jdat.run_after_time).unwrap_or_default()
                     );
-                    println!("\t[priority] {:?}", &jdat.priority().as_str_name());
-                    println!("\t[timeout] {} msec", &jdat.timeout);
+                    println!("\t[priority] {:?}", jdat.priority().as_str_name());
+                    println!("\t[timeout] {} msec", jdat.timeout);
                 } else {
                     println!("\t[worker_id] not found");
                 }

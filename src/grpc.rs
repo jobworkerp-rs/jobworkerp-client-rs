@@ -62,7 +62,7 @@ impl GrpcConnection {
         let channel =
             Arc::new(RwLock::new(endpoint.connect().await.context(format!(
                 "Failed to connect to gRPC server at {}",
-                &addr
+                addr
             ))?));
         Ok(Self { endpoint, channel })
     }
