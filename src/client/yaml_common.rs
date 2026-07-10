@@ -16,6 +16,7 @@
 use anyhow::{Context as _, Result, anyhow};
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 static ENV_RE: Lazy<Regex> = Lazy::new(|| {
@@ -40,6 +41,13 @@ static ENV_RE: Lazy<Regex> = Lazy::new(|| {
 /// single-quoted form, is still the operator's responsibility. See
 /// `docs/worker-yaml.md` for the full substitution model.
 pub fn expand_env(raw: &str) -> Result<String> {
+    expand_env_with_overrides(raw, &HashMap::new())
+}
+
+/// Expand placeholders with explicit values taking precedence over the
+/// process environment. Use this when a caller must carry configuration into
+/// a registered YAML payload without mutating process-global state.
+pub fn expand_env_with_overrides(raw: &str, overrides: &HashMap<String, String>) -> Result<String> {
     // `replace_all` cannot return Result, so we record the first error
     // and bail after the scan completes. Subsequent matches
     // short-circuit to "" to avoid additional env lookups.
@@ -49,7 +57,9 @@ pub fn expand_env(raw: &str) -> Result<String> {
             return String::new();
         }
         let name = &caps[1];
-        let resolved = if let Ok(v) = std::env::var(name) {
+        let resolved = if let Some(v) = overrides.get(name) {
+            v.clone()
+        } else if let Ok(v) = std::env::var(name) {
             v
         } else {
             match caps.get(2) {
@@ -138,6 +148,17 @@ pub fn yaml_base_dir(yaml_path: &Path) -> PathBuf {
 /// Implemented as a sync-walk-then-async-read loop so the returned future
 /// stays `Send` (recursive async fns crossing &mut tree borrows do not).
 pub async fn resolve_includes(value: &mut serde_yaml::Value, base_dir: &Path) -> Result<()> {
+    resolve_includes_with_overrides(value, base_dir, &HashMap::new()).await
+}
+
+/// Resolve `$file` includes while applying explicit placeholder overrides to
+/// included content. This mirrors [`resolve_includes`] without requiring a
+/// caller to modify the process environment.
+pub async fn resolve_includes_with_overrides(
+    value: &mut serde_yaml::Value,
+    base_dir: &Path,
+    overrides: &HashMap<String, String>,
+) -> Result<()> {
     if first_include_path(value).is_none() {
         return Ok(());
     }
@@ -170,7 +191,7 @@ pub async fn resolve_includes(value: &mut serde_yaml::Value, base_dir: &Path) ->
         // Expand `%{VAR}` in the included content too: the top-level
         // expand_env ran before this file was read, so its placeholders
         // would otherwise survive verbatim into the registered payload.
-        let content = expand_env(&content)
+        let content = expand_env_with_overrides(&content, overrides)
             .with_context(|| format!("expanding env in $file include {}", canonical.display()))?;
         let replaced = replace_first_include(value, &content);
         debug_assert!(
@@ -227,6 +248,19 @@ fn include_target(map: &serde_yaml::Mapping) -> Option<String> {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn explicit_overrides_take_precedence_without_mutating_process_environment() {
+        let overrides = std::collections::HashMap::from([(
+            "YAML_COMMON_TEST_PREFIX".to_string(),
+            "\"escaped\\nvalue\"".to_string(),
+        )]);
+        let expanded =
+            expand_env_with_overrides("text: %{YAML_COMMON_TEST_PREFIX:-\"\"}", &overrides)
+                .unwrap();
+
+        assert_eq!(expanded, "text: \"escaped\\nvalue\"");
+    }
 
     #[test]
     fn yaml_base_dir_handles_bare_filename() {
