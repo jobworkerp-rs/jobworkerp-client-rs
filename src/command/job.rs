@@ -23,7 +23,12 @@
 // -p, --priority <priority> priority of the job (HIGH, MIDDLE, LOW)(for enqueue)
 // -t, --timeout <timeout> timeout of the job (milli-seconds) (for enqueue)
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use super::WorkerIdOrName;
 use crate::{
@@ -46,7 +51,7 @@ use crate::{
     },
     proto::JobworkerpProto,
 };
-use anyhow::Result;
+use anyhow::{Context as AnyhowContext, Result};
 use chrono::DateTime;
 use clap::{Parser, ValueEnum};
 use command_utils::protobuf::ProtobufDescriptor;
@@ -113,11 +118,14 @@ pub enum JobCommand {
     // `workflow_file` (URL/path) and `workflow_data` (inline DSL) map to the
     // server's `WorkflowRunArgs.workflow_source` oneof, so exactly one must be set.
     #[clap(group = clap::ArgGroup::new("enqueue_workflow_source").required(true).multiple(false).args(["workflow_file", "workflow_data"]))]
+    #[clap(group = clap::ArgGroup::new("enqueue_workflow_context").multiple(false).args(["context", "context_file"]))]
     EnqueueWorkflow {
         #[clap(short, long)]
         channel: Option<String>,
         #[clap(long)]
         context: Option<String>,
+        #[clap(long, help = "Read workflow_context from a UTF-8 text file")]
+        context_file: Option<PathBuf>,
         #[clap(short, long)]
         input: String,
         #[clap(short, long)]
@@ -139,6 +147,7 @@ pub enum JobCommand {
     },
     // `workflow_file` / `workflow_data` map to `CreateWorkflowArgs.workflow_source` oneof.
     #[clap(group = clap::ArgGroup::new("create_workflow_source").required(true).multiple(false).args(["workflow_file", "workflow_data"]))]
+    #[clap(group = clap::ArgGroup::new("create_workflow_context").multiple(false).args(["context", "context_file"]))]
     CreateWorkflow {
         #[clap(short, long, help = "Name of the worker to create from the workflow")]
         name: String,
@@ -148,6 +157,8 @@ pub enum JobCommand {
         workflow_data: Option<String>,
         #[clap(long)]
         context: Option<String>,
+        #[clap(long, help = "Read workflow_context from a UTF-8 text file")]
+        context_file: Option<PathBuf>,
         #[clap(short, long)]
         channel: Option<String>,
         #[clap(long, value_parser = crate::command::worker::QueueTypeArg::parse)]
@@ -275,6 +286,25 @@ fn build_create_workflow_args_json(
         args["worker_options"] = worker_options;
     }
     Ok(args)
+}
+
+fn read_workflow_context_file(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read workflow context file at {}", path.display()))
+}
+
+fn workflow_context_from_cli(
+    context: Option<&str>,
+    context_file: Option<&Path>,
+) -> Result<Option<String>> {
+    match (context, context_file) {
+        (Some(ctx), None) => Ok(Some(ctx.to_owned())),
+        (None, Some(path)) => read_workflow_context_file(path).map(Some),
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("--context and --context-file cannot be used together")
+        }
+    }
 }
 
 /// Set the `workflow_source` oneof; exactly one of file/data must be present.
@@ -539,6 +569,7 @@ impl JobCommand {
             Self::EnqueueWorkflow {
                 channel,
                 context,
+                context_file,
                 input,
                 priority,
                 run_after_time,
@@ -553,6 +584,14 @@ impl JobCommand {
                 let (_span, cx) =
                     self.create_parent_span("jobworkerp-client", "JobCommand::EnqueueWorkflow");
                 let cx = Some(cx);
+                let workflow_context =
+                    match workflow_context_from_cli(context.as_deref(), context_file.as_deref()) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            eprintln!("{e:#}");
+                            return;
+                        }
+                    };
 
                 let using = Some("run");
                 let runner = helper
@@ -598,7 +637,7 @@ impl JobCommand {
                             workflow_file.as_deref(),
                             workflow_data.as_deref(),
                             input,
-                            context.as_deref(),
+                            workflow_context.as_deref(),
                             execution_id.as_deref(),
                         ) {
                             Ok(v) => v,
@@ -642,13 +681,17 @@ impl JobCommand {
                             using,
                         )
                         .await;
-                    // Clean up temp worker regardless of enqueue result
-                    let _ = helper
-                        .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
-                        .await;
-                    let (meta, mut response) = match enqueue_result {
+                    let (meta, response) = match enqueue_result {
                         Ok(r) => r,
                         Err(e) => {
+                            // No job can be running when enqueue fails, so clean up immediately.
+                            let _ = helper
+                                .delete_worker_by_name(
+                                    cx.as_ref(),
+                                    metadata.clone(),
+                                    wname.as_str(),
+                                )
+                                .await;
                             eprintln!("Workflow execution failed: {e:#}");
                             return;
                         }
@@ -682,9 +725,9 @@ impl JobCommand {
                         &display_options,
                     );
 
-                    let mut item_count = 0;
-                    while let Ok(Some(item)) = response.message().await {
-                        match &item.item {
+                    let (mut response, item_count) =
+                        drain_workflow_stream(response, |item, item_count| {
+                            match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
                                 JobResultCommand::print_streaming_output(
                                     v.as_slice(),
@@ -693,7 +736,7 @@ impl JobCommand {
                                     &display_options,
                                     item_count,
                                 );
-                                item_count += 1;
+                                true
                             }
                             Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
                                 // Only display if no Data chunks were output yet
@@ -706,17 +749,17 @@ impl JobCommand {
                                     &display_options,
                                     item_count,
                                 );
-                                item_count += 1;
+                                true
                             }
-                            Some(jobworkerp::data::result_output_item::Item::End(_)) => {
-                                break;
-                            }
-                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
+                            Some(jobworkerp::data::result_output_item::Item::End(_))
+                            | Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
                             | None => {
                                 // Skip: FinalCollected after Data chunks already output, or empty items
+                                false
                             }
-                        }
-                    }
+                            }
+                        })
+                        .await;
 
                     // End streaming session for workflow
                     JobResultCommand::end_streaming_session(item_count, format, &display_options);
@@ -747,6 +790,12 @@ impl JobCommand {
                             println!("Error reading trailers: {e}");
                         }
                     }
+
+                    // Keep the ephemeral worker alive until the stream and trailers are fully
+                    // consumed. The dispatcher may still need the worker while streaming.
+                    let _ = helper
+                        .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
+                        .await;
                 } else {
                     println!("runner {} not found", RunnerType::Workflow.as_str_name());
                     return;
@@ -757,6 +806,7 @@ impl JobCommand {
                 workflow_file,
                 workflow_data,
                 context,
+                context_file,
                 channel,
                 queue_type,
                 response_type,
@@ -770,6 +820,14 @@ impl JobCommand {
                 let (_span, cx) =
                     self.create_parent_span("jobworkerp-client", "JobCommand::CreateWorkflow");
                 let cx = Some(cx);
+                let workflow_context =
+                    match workflow_context_from_cli(context.as_deref(), context_file.as_deref()) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            eprintln!("{e:#}");
+                            return;
+                        }
+                    };
 
                 let using = Some("create");
                 let runner = match helper
@@ -809,7 +867,7 @@ impl JobCommand {
                     name,
                     workflow_file.as_deref(),
                     workflow_data.as_deref(),
-                    context.as_deref(),
+                    workflow_context.as_deref(),
                     worker_options,
                 ) {
                     Ok(v) => v,
@@ -1178,6 +1236,29 @@ impl UseJobworkerpClient for JobCommandHelper {
 impl UseJobworkerpClientHelper for JobCommandHelper {}
 impl Tracing for JobCommandHelper {}
 
+async fn drain_workflow_stream<S, F>(mut response: S, mut on_item: F) -> (S, usize)
+where
+    S: futures::Stream<Item = Result<jobworkerp::data::ResultOutputItem, tonic::Status>> + Unpin,
+    F: FnMut(&jobworkerp::data::ResultOutputItem, usize) -> bool,
+{
+    use futures::StreamExt;
+
+    let mut item_count = 0;
+    while let Some(Ok(item)) = response.next().await {
+        let is_end = matches!(
+            &item.item,
+            Some(jobworkerp::data::result_output_item::Item::End(_))
+        );
+        if on_item(&item, item_count) {
+            item_count += 1;
+        }
+        if is_end {
+            break;
+        }
+    }
+    (response, item_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1243,6 +1324,76 @@ mod tests {
     }
 
     #[test]
+    fn enqueue_workflow_accepts_context_file() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--input",
+            "{}",
+            "--context-file",
+            "./context.json",
+        ]);
+        match parsed.cmd {
+            JobCommand::EnqueueWorkflow {
+                context,
+                context_file,
+                ..
+            } => {
+                assert!(context.is_none());
+                assert_eq!(
+                    context_file.as_deref(),
+                    Some(std::path::Path::new("./context.json"))
+                );
+            }
+            other => panic!("expected EnqueueWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enqueue_workflow_rejects_context_and_context_file_together() {
+        let res = TestRoot::try_parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--input",
+            "{}",
+            "--context",
+            "{\"a\":1}",
+            "--context-file",
+            "./context.json",
+        ]);
+        assert!(res.is_err(), "context sources must be mutually exclusive");
+    }
+
+    #[test]
+    fn enqueue_workflow_still_accepts_context() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--input",
+            "{}",
+            "--context",
+            "{\"a\":1}",
+        ]);
+        match parsed.cmd {
+            JobCommand::EnqueueWorkflow {
+                context,
+                context_file,
+                ..
+            } => {
+                assert_eq!(context.as_deref(), Some("{\"a\":1}"));
+                assert!(context_file.is_none());
+            }
+            other => panic!("expected EnqueueWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn enqueue_workflow_rejects_both_sources() {
         let res = TestRoot::try_parse_from([
             "test",
@@ -1261,6 +1412,58 @@ mod tests {
     fn enqueue_workflow_rejects_missing_source() {
         let res = TestRoot::try_parse_from(["test", "enqueue-workflow", "--input", "{}"]);
         assert!(res.is_err(), "missing source must be rejected");
+    }
+
+    #[tokio::test]
+    async fn drain_workflow_stream_stops_at_end_and_reports_data_count() {
+        use futures::{StreamExt, stream};
+        use jobworkerp::data::{ResultOutputItem, Trailer, result_output_item::Item};
+
+        let response = stream::iter([
+            Ok(ResultOutputItem {
+                item: Some(Item::Data(b"first".to_vec())),
+            }),
+            Ok(ResultOutputItem {
+                item: Some(Item::End(Trailer::default())),
+            }),
+            Ok(ResultOutputItem {
+                item: Some(Item::Data(b"after-end".to_vec())),
+            }),
+        ]);
+
+        let (mut response, item_count) = drain_workflow_stream(response, |item, _| {
+            matches!(&item.item, Some(Item::Data(_)))
+        })
+        .await;
+
+        assert_eq!(item_count, 1);
+        assert!(
+            response.next().await.is_some(),
+            "items after End remain unread"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_workflow_stream_stops_on_transport_error() {
+        use futures::stream;
+        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+
+        let response = stream::iter([
+            Ok(ResultOutputItem {
+                item: Some(Item::Data(b"before-error".to_vec())),
+            }),
+            Err(tonic::Status::unavailable("stream disconnected")),
+            Ok(ResultOutputItem {
+                item: Some(Item::Data(b"after-error".to_vec())),
+            }),
+        ]);
+
+        let (_, item_count) = drain_workflow_stream(response, |item, _| {
+            matches!(&item.item, Some(Item::Data(_)))
+        })
+        .await;
+
+        assert_eq!(item_count, 1);
     }
 
     // --- clap parse tests: CreateWorkflow ---
@@ -1290,6 +1493,51 @@ mod tests {
             }
             other => panic!("expected CreateWorkflow, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn create_workflow_accepts_context_file() {
+        let parsed = TestRoot::parse_from([
+            "test",
+            "create-workflow",
+            "--name",
+            "my-wf",
+            "--workflow-file",
+            "wf.yaml",
+            "--context-file",
+            "./context.json",
+        ]);
+        match parsed.cmd {
+            JobCommand::CreateWorkflow {
+                context,
+                context_file,
+                ..
+            } => {
+                assert!(context.is_none());
+                assert_eq!(
+                    context_file.as_deref(),
+                    Some(std::path::Path::new("./context.json"))
+                );
+            }
+            other => panic!("expected CreateWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_workflow_rejects_context_and_context_file_together() {
+        let res = TestRoot::try_parse_from([
+            "test",
+            "create-workflow",
+            "--name",
+            "my-wf",
+            "--workflow-file",
+            "wf.yaml",
+            "--context",
+            "{\"a\":1}",
+            "--context-file",
+            "./context.json",
+        ]);
+        assert!(res.is_err(), "context sources must be mutually exclusive");
     }
 
     #[test]
@@ -1343,6 +1591,56 @@ mod tests {
     fn run_args_rejects_both_or_neither_sources() {
         assert!(build_workflow_run_args_json(Some("a"), Some("b"), "{}", None, None).is_err());
         assert!(build_workflow_run_args_json(None, None, "{}", None, None).is_err());
+    }
+
+    #[test]
+    fn context_file_content_can_be_used_as_workflow_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("context.json");
+        std::fs::write(&path, "{\"token\":\"secret-value\"}").unwrap();
+
+        let context = read_workflow_context_file(&path).unwrap();
+        let v = build_workflow_run_args_json(Some("wf"), None, "{}", Some(&context), None).unwrap();
+
+        assert_eq!(v["workflow_context"], json!("{\"token\":\"secret-value\"}"));
+    }
+
+    #[test]
+    fn context_file_content_can_be_used_as_create_workflow_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("context.json");
+        std::fs::write(&path, "{\"provider\":\"gitea\"}").unwrap();
+
+        let context = read_workflow_context_file(&path).unwrap();
+        let opts = build_worker_options_json(None, None, None, None, None, None);
+        let v =
+            build_create_workflow_args_json("w", Some("wf"), None, Some(&context), opts).unwrap();
+
+        assert_eq!(v["workflow_context"], json!("{\"provider\":\"gitea\"}"));
+    }
+
+    #[test]
+    fn empty_context_file_omits_workflow_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("context.json");
+        std::fs::write(&path, "").unwrap();
+
+        let context = read_workflow_context_file(&path).unwrap();
+        let v = build_workflow_run_args_json(Some("wf"), None, "{}", Some(&context), None).unwrap();
+
+        assert!(v.get("workflow_context").is_none());
+    }
+
+    #[test]
+    fn context_file_read_error_is_user_facing_without_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing-context.json");
+        let err = read_workflow_context_file(&path).unwrap_err();
+        let msg = format!("{err:#}");
+
+        assert!(msg.contains("failed to read workflow context file at"));
+        assert!(msg.contains("missing-context.json"));
+        assert!(!msg.contains("secret-value"));
     }
 
     // --- pure function tests: build_worker_options_json ---

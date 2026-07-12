@@ -357,4 +357,5 @@ runner/schema/bak/
 spec-docs/
 
 mcp-settings.toml
+/temp/
 
