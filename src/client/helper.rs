@@ -167,14 +167,14 @@ fn build_worker_data_from_json(
 fn build_job_request(
     worker_id: WorkerId,
     args: Vec<u8>,
-    timeout_sec: u32,
+    timeout_sec: u64,
     run_after_time: Option<i64>,
     priority: Option<Priority>,
     using: Option<&str>,
 ) -> JobRequest {
     JobRequest {
         args,
-        timeout: Some((timeout_sec * 1000).into()),
+        timeout: Some(timeout_sec.saturating_mul(1000)),
         worker: Some(crate::jobworkerp::service::job_request::Worker::WorkerId(
             worker_id,
         )),
@@ -817,7 +817,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         runner_name: &'a str,
         mut worker_data: WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&'a str>,
@@ -859,7 +859,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&str>,
@@ -890,7 +890,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&str>,
@@ -935,7 +935,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&'a str>,
@@ -987,7 +987,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&'a str>,
@@ -1051,7 +1051,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&'a str>,
@@ -1100,14 +1100,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_spec: crate::jobworkerp::service::job_request::Worker,
         args: Vec<u8>,
-        timeout_sec: u32,
+        timeout_sec: u64,
         using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send + 'a {
         async move {
             tracing::debug!("enqueue_job_and_get_output: {:?}", &worker_spec);
             let job_request_payload = JobRequest {
                 args,
-                timeout: Some((timeout_sec * 1000).into()),
+                timeout: Some(timeout_sec.saturating_mul(1000)),
                 worker: Some(worker_spec.clone()),
                 priority: Some(Priority::High as i32),
                 using: using.map(std::string::ToString::to_string),
@@ -1257,7 +1257,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker: Worker,
         job_args: Vec<u8>,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         let using = using.map(std::borrow::ToOwned::to_owned);
@@ -1303,7 +1303,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         runner_settings: Vec<u8>,
         worker_params: Option<serde_json::Value>,
         job_args: Vec<u8>,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         let name = name.to_owned();
@@ -1338,7 +1338,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         runner_settings: Vec<u8>,
         worker_params: Option<serde_json::Value>,
         job_args: Vec<u8>,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         let runner_name = runner_name.to_owned();
@@ -1383,7 +1383,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         runner_settings: Option<serde_json::Value>,
         worker_params: Option<serde_json::Value>,
         job_args: serde_json::Value,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
         let runner_name = runner_name.to_owned();
@@ -1472,7 +1472,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         job_args: serde_json::Value,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
         async move {
@@ -1574,7 +1574,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         job_args: serde_json::Value,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<JobTerminalOutcome<serde_json::Value>>> + Send + 'a
     {
@@ -1744,7 +1744,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         metadata: Arc<HashMap<String, String>>,
         worker_data: &'a WorkerData,
         job_args: serde_json::Value,
-        job_timeout_sec: u32,
+        job_timeout_sec: u64,
         using: Option<&'a str>,
     ) -> impl std::future::Future<
         Output = Result<(
@@ -2157,6 +2157,27 @@ mod tests {
             JOB_RESULT_HEADER_NAME,
             MetadataValue::from_bytes(bytes.as_slice()),
         );
+    }
+
+    #[test]
+    fn build_job_request_keeps_multi_day_timeout_in_u64_milliseconds() {
+        let request = build_job_request(
+            WorkerId { value: 1 },
+            vec![],
+            72 * 24 * 60 * 60,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(request.timeout, Some(6_220_800_000));
+    }
+
+    #[test]
+    fn build_job_request_saturates_at_the_u64_millisecond_limit() {
+        let request = build_job_request(WorkerId { value: 1 }, vec![], u64::MAX, None, None, None);
+
+        assert_eq!(request.timeout, Some(u64::MAX));
     }
 
     #[test]

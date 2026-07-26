@@ -45,7 +45,7 @@ impl From<JobworkerpClient> for JobworkerpClientWrapper {
 }
 
 impl JobworkerpClientWrapper {
-    const DEFAULT_REQUEST_TIMEOUT_SEC: u32 = 1200;
+    const DEFAULT_REQUEST_TIMEOUT_SEC: u64 = 1200;
 
     fn ensure_workflow_context_supported(desc: &prost_reflect::MessageDescriptor) -> Result<()> {
         if desc.get_field_by_name("workflow_context").is_none() {
@@ -162,9 +162,7 @@ impl JobworkerpClientWrapper {
                     Some(worker_params),
                     job_args,
                     self.request_timeout()
-                        .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| {
-                            u32::try_from(t.as_secs()).unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC)
-                        }),
+                        .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
                     using,
                 )
                 .await?;
@@ -226,9 +224,7 @@ impl JobworkerpClientWrapper {
                 &worker_data,
                 args_json,
                 self.request_timeout()
-                    .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| {
-                        u32::try_from(t.as_secs()).unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC)
-                    }),
+                    .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
                 using,
             )
             .await?;
@@ -383,7 +379,7 @@ impl JobworkerpClientWrapper {
     )> {
         let timeout_sec = self
             .request_timeout()
-            .map(|t| t.as_secs() as u32)
+            .map(|t| t.as_secs())
             .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC);
         // Own `using` so the fallback future (which may outlive this call) can capture it.
         let using_owned = using.map(std::string::ToString::to_string);
