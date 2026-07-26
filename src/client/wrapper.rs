@@ -596,7 +596,7 @@ impl JobworkerpClientWrapper {
 ///     through rather than aborting on what is almost certainly a sentinel value.
 ///
 /// Adding more statuses here would risk turning resume-style flows (Waiting) into hard errors.
-const FAILURE_WORKFLOW_STATUSES: &[&str] = &["Faulted"];
+pub(crate) const FAILURE_WORKFLOW_STATUSES: &[&str] = &["Faulted"];
 
 /// `WorkflowResult.status` values that are expected to appear in a terminal output: a success
 /// (`Completed`), the recognised failure (`Faulted`), or a deliberate non-error suspension
@@ -604,7 +604,8 @@ const FAILURE_WORKFLOW_STATUSES: &[&str] = &["Faulted"];
 /// status string the server side may add in the future — is a sentinel that should not show up at
 /// the terminal boundary. We pass it through (to avoid breaking unknown-but-correct flows) but
 /// emit a `warn!` so it surfaces in logs for investigation.
-const KNOWN_TERMINAL_WORKFLOW_STATUSES: &[&str] = &["Completed", "Faulted", "Cancelled", "Waiting"];
+pub(crate) const KNOWN_TERMINAL_WORKFLOW_STATUSES: &[&str] =
+    &["Completed", "Faulted", "Cancelled", "Waiting"];
 
 /// Emit a `warn!` when a `WorkflowResult.status` arrives at the terminal boundary that we did not
 /// expect to see there. Helpful for catching server-side regressions (e.g. an in-flight status
@@ -653,7 +654,7 @@ fn check_workflow_output_status(output: serde_json::Value) -> Result<serde_json:
 /// the generic "workflow status: Faulted" message instead of the real validation / runtime error.
 /// Falls back to the `output` field (same name in both representations) when no error_message is
 /// present.
-fn extract_workflow_error_message(output: &serde_json::Value) -> Option<String> {
+pub(crate) fn extract_workflow_error_message(output: &serde_json::Value) -> Option<String> {
     output
         .get("error_message")
         .or_else(|| output.get("errorMessage"))

@@ -90,34 +90,46 @@ async fn main() {
     let address = opts.address.clone();
     let timeout = opts.timeout.map(Duration::from_millis);
     let client = JobworkerpClient::new(address, timeout).await.unwrap();
-    match opts.subcmd {
+    // Only `Job` can fail the process's exit code: workflow execution errors must be visible to
+    // scripts/CI invoking this CLI, whereas the other subcommands report their own errors inline.
+    let job_execution_error = match opts.subcmd {
+        SubCommand::Job(cmd) => cmd.cmd.execute(&client, Arc::new(metadata)).await.err(),
         SubCommand::Runner(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::Worker(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::Function(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::FunctionSet(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
-        }
-        SubCommand::Job(cmd) => {
-            cmd.cmd.execute(&client, Arc::new(metadata)).await;
+            None
         }
         SubCommand::JobResult(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::JobStatus(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::WorkerInstance(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
         SubCommand::Manifest(cmd) => {
             cmd.cmd.execute(&client, &metadata).await;
+            None
         }
-    }
+    };
     command_utils::util::tracing::shutdown_tracer_provider();
+    if let Some(error) = job_execution_error {
+        eprintln!("{error:#}");
+        std::process::exit(1);
+    }
 }

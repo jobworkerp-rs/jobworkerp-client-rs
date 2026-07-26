@@ -25,6 +25,7 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -32,7 +33,14 @@ use std::{
 
 use super::WorkerIdOrName;
 use crate::{
-    client::{UseJobworkerpClient, helper::UseJobworkerpClientHelper},
+    client::{
+        UseJobworkerpClient,
+        helper::UseJobworkerpClientHelper,
+        wrapper::{
+            FAILURE_WORKFLOW_STATUSES, KNOWN_TERMINAL_WORKFLOW_STATUSES,
+            extract_workflow_error_message,
+        },
+    },
     command::{job_result::JobResultCommand, to_request},
     display::{
         CardVisualizer, DisplayOptions, JsonPrettyVisualizer, JsonVisualizer, TableVisualizer,
@@ -58,6 +66,7 @@ use command_utils::protobuf::ProtobufDescriptor;
 use command_utils::trace::Tracing;
 use opentelemetry::{Context, global, trace::Span};
 use prost::Message;
+use prost_reflect::MessageDescriptor;
 
 pub const JOB_RESULT_HEADER_NAME: &str = "x-job-result-bin";
 pub const JOB_ID_HEADER_NAME: &str = "x-job-id-bin";
@@ -402,7 +411,7 @@ impl JobCommand {
         &self,
         client: &crate::client::JobworkerpClient,
         metadata: Arc<HashMap<String, String>>,
-    ) {
+    ) -> Result<()> {
         match self {
             Self::Enqueue {
                 worker,
@@ -589,7 +598,7 @@ impl JobCommand {
                         Ok(ctx) => ctx,
                         Err(e) => {
                             eprintln!("{e:#}");
-                            return;
+                            return Ok(());
                         }
                     };
 
@@ -643,7 +652,7 @@ impl JobCommand {
                             Ok(v) => v,
                             Err(e) => {
                                 eprintln!("Invalid workflow arguments: {e:#}");
-                                return;
+                                return Ok(());
                             }
                         };
                         JobworkerpProto::json_value_to_message(
@@ -659,7 +668,7 @@ impl JobCommand {
                         .unwrap()
                     } else {
                         println!("args_descriptor not found");
-                        return;
+                        return Ok(());
                     };
                     let result_desc =
                         JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
@@ -693,7 +702,7 @@ impl JobCommand {
                                 )
                                 .await;
                             eprintln!("Workflow execution failed: {e:#}");
-                            return;
+                            return Err(e);
                         }
                     };
                     // Check for job result header in initial response metadata
@@ -725,9 +734,13 @@ impl JobCommand {
                         &display_options,
                     );
 
-                    let (mut response, item_count) =
-                        drain_workflow_stream(response, |item, item_count| {
-                            match &item.item {
+                    let mut displayed_item_count = 0;
+                    let workflow_result = async {
+                        let mut terminal_output = WorkflowTerminalOutput::default();
+                        let (mut response, _item_count) =
+                            drain_workflow_stream(response, |item, item_count| {
+                                terminal_output.update(item);
+                                match &item.item {
                             Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
                                 JobResultCommand::print_streaming_output(
                                     v.as_slice(),
@@ -736,6 +749,7 @@ impl JobCommand {
                                     &display_options,
                                     item_count,
                                 );
+                                displayed_item_count = item_count + 1;
                                 true
                             }
                             Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
@@ -749,6 +763,7 @@ impl JobCommand {
                                     &display_options,
                                     item_count,
                                 );
+                                displayed_item_count = item_count + 1;
                                 true
                             }
                             Some(jobworkerp::data::result_output_item::Item::End(_))
@@ -758,47 +773,78 @@ impl JobCommand {
                                 false
                             }
                             }
-                        })
-                        .await;
+                            })
+                            .await?;
 
-                    // End streaming session for workflow
-                    JobResultCommand::end_streaming_session(item_count, format, &display_options);
-                    //  // Check for job result header in last response metadata
-                    // if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
-                    //     println!("Job result header found in last response metadata");
-                    //     JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
-                    // }
+                        let terminal_output_bytes =
+                            terminal_output.terminal_output_bytes().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "workflow stream ended without a WorkflowResult data item"
+                                )
+                            })?;
+                        if let Some(terminal_output) = decode_workflow_terminal_output(
+                            terminal_output_bytes,
+                            result_desc.as_ref(),
+                        ) {
+                            validate_workflow_terminal_output(&terminal_output)?;
+                        }
+                        //  // Check for job result header in last response metadata
+                        // if let Some(_result_bin) = meta.get_bin(JOB_RESULT_HEADER_NAME) {
+                        //     println!("Job result header found in last response metadata");
+                        //     JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
+                        // }
 
-                    // Also check trailers for completeness
-                    match response.trailers().await {
-                        Ok(Some(trailers)) => {
-                            if !trailers.is_empty()
-                                && let Some(_trailer_result) =
-                                    trailers.get_bin(JOB_RESULT_HEADER_NAME)
-                            {
-                                println!("Trailer job result header found");
-                                JobResultCommand::print_job_result_metadata(
-                                    &trailers,
-                                    result_desc.clone(),
-                                );
+                        // Also check trailers for completeness
+                        match response.trailers().await {
+                            Ok(Some(trailers)) => {
+                                if !trailers.is_empty()
+                                    && let Some(_trailer_result) =
+                                        trailers.get_bin(JOB_RESULT_HEADER_NAME)
+                                {
+                                    println!("Trailer job result header found");
+                                    JobResultCommand::print_job_result_metadata(
+                                        &trailers,
+                                        result_desc.clone(),
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                return Err(anyhow::anyhow!(
+                                    "workflow stream ended without gRPC trailers"
+                                ));
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "failed to read workflow stream trailers: {e}"
+                                ));
                             }
                         }
-                        Ok(None) => {
-                            println!("No trailers found");
-                        }
-                        Err(e) => {
-                            println!("Error reading trailers: {e}");
-                        }
+
+                        Ok(())
                     }
+                    .await;
+                    let workflow_result = finish_workflow_stream_display(
+                        workflow_result,
+                        displayed_item_count,
+                        |item_count| {
+                            JobResultCommand::end_streaming_session(
+                                item_count,
+                                format,
+                                &display_options,
+                            );
+                        },
+                    );
 
                     // Keep the ephemeral worker alive until the stream and trailers are fully
                     // consumed. The dispatcher may still need the worker while streaming.
-                    let _ = helper
-                        .delete_worker_by_name(cx.as_ref(), metadata, wname.as_str())
-                        .await;
+                    finish_workflow_execution(
+                        workflow_result,
+                        helper.delete_worker_by_name(cx.as_ref(), metadata, wname.as_str()),
+                    )
+                    .await?;
                 } else {
                     println!("runner {} not found", RunnerType::Workflow.as_str_name());
-                    return;
+                    return Ok(());
                 }
             }
             Self::CreateWorkflow {
@@ -825,7 +871,7 @@ impl JobCommand {
                         Ok(ctx) => ctx,
                         Err(e) => {
                             eprintln!("{e:#}");
-                            return;
+                            return Ok(());
                         }
                     };
 
@@ -841,7 +887,7 @@ impl JobCommand {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("Failed to find WORKFLOW runner: {e:#}");
-                        return;
+                        return Ok(());
                     }
                 };
                 let Some(Runner {
@@ -850,7 +896,7 @@ impl JobCommand {
                 }) = runner
                 else {
                     println!("runner {} not found", RunnerType::Workflow.as_str_name());
-                    return;
+                    return Ok(());
                 };
 
                 // Build CreateWorkflowArgs JSON, then encode against the
@@ -873,7 +919,7 @@ impl JobCommand {
                     Ok(v) => v,
                     Err(e) => {
                         eprintln!("Invalid workflow arguments: {e:#}");
-                        return;
+                        return Ok(());
                     }
                 };
                 let Some(args_descriptor) =
@@ -884,7 +930,7 @@ impl JobCommand {
                         })
                 else {
                     println!("args_descriptor not found");
-                    return;
+                    return Ok(());
                 };
                 let args = match JobworkerpProto::json_value_to_message(
                     args_descriptor,
@@ -895,7 +941,7 @@ impl JobCommand {
                     Ok(a) => a,
                     Err(e) => {
                         eprintln!("Failed to encode CreateWorkflowArgs: {e:#?}");
-                        return;
+                        return Ok(());
                     }
                 };
                 let result_desc = JobworkerpProto::parse_result_schema_descriptor(&rdata, using)
@@ -942,7 +988,7 @@ impl JobCommand {
                     Ok(o) => o,
                     Err(e) => {
                         eprintln!("Workflow worker creation failed: {e:#}");
-                        return;
+                        return Ok(());
                     }
                 };
 
@@ -1217,6 +1263,7 @@ impl JobCommand {
             }
             Ok(())
         }
+        Ok(())
     }
 }
 struct JobCommandHelper {
@@ -1236,7 +1283,7 @@ impl UseJobworkerpClient for JobCommandHelper {
 impl UseJobworkerpClientHelper for JobCommandHelper {}
 impl Tracing for JobCommandHelper {}
 
-async fn drain_workflow_stream<S, F>(mut response: S, mut on_item: F) -> (S, usize)
+async fn drain_workflow_stream<S, F>(mut response: S, mut on_item: F) -> Result<(S, usize)>
 where
     S: futures::Stream<Item = Result<jobworkerp::data::ResultOutputItem, tonic::Status>> + Unpin,
     F: FnMut(&jobworkerp::data::ResultOutputItem, usize) -> bool,
@@ -1244,7 +1291,9 @@ where
     use futures::StreamExt;
 
     let mut item_count = 0;
-    while let Some(Ok(item)) = response.next().await {
+    while let Some(item) = response.next().await {
+        let item =
+            item.map_err(|error| anyhow::anyhow!("workflow stream failed before End: {error}"))?;
         let is_end = matches!(
             &item.item,
             Some(jobworkerp::data::result_output_item::Item::End(_))
@@ -1253,10 +1302,94 @@ where
             item_count += 1;
         }
         if is_end {
-            break;
+            return Ok((response, item_count));
         }
     }
-    (response, item_count)
+    Err(anyhow::anyhow!("workflow stream ended before End"))
+}
+
+#[derive(Default)]
+struct WorkflowTerminalOutput {
+    last_data: Option<Vec<u8>>,
+    final_collected: Option<Vec<u8>>,
+}
+
+impl WorkflowTerminalOutput {
+    fn update(&mut self, item: &jobworkerp::data::ResultOutputItem) {
+        match &item.item {
+            Some(jobworkerp::data::result_output_item::Item::Data(output)) => {
+                self.last_data = Some(output.clone());
+            }
+            Some(jobworkerp::data::result_output_item::Item::FinalCollected(output)) => {
+                self.final_collected = Some(output.clone());
+            }
+            Some(jobworkerp::data::result_output_item::Item::End(_)) | None => {}
+        }
+    }
+
+    fn terminal_output_bytes(&self) -> Option<&[u8]> {
+        self.final_collected
+            .as_deref()
+            .or(self.last_data.as_deref())
+    }
+}
+
+fn decode_workflow_terminal_output(
+    data: &[u8],
+    result_descriptor: Option<&MessageDescriptor>,
+) -> Option<serde_json::Value> {
+    let message =
+        ProtobufDescriptor::get_message_from_bytes(result_descriptor?.clone(), data).ok()?;
+    ProtobufDescriptor::message_to_json_value(&message).ok()
+}
+
+fn finish_workflow_stream_display<T, F>(
+    result: Result<T>,
+    item_count: usize,
+    end_stream: F,
+) -> Result<T>
+where
+    F: FnOnce(usize),
+{
+    end_stream(item_count);
+    result
+}
+
+async fn finish_workflow_execution<T, U, F>(execution: Result<T>, cleanup: F) -> Result<T>
+where
+    F: Future<Output = Result<U>>,
+{
+    let cleanup_result = cleanup
+        .await
+        .context("failed to delete temporary workflow worker");
+    match execution {
+        Err(error) => Err(error),
+        Ok(value) => {
+            cleanup_result?;
+            Ok(value)
+        }
+    }
+}
+
+// Shares status vocabulary and error-message extraction with
+// `client::wrapper::check_workflow_output_status` so the two call sites agree on what counts as
+// a workflow failure. Unlike the wrapper (which passes unknown statuses through with a `warn!`
+// for non-interactive callers such as cron), this CLI path treats an unrecognised terminal
+// status as a hard error since a human is watching the command's exit code.
+fn validate_workflow_terminal_output(output: &serde_json::Value) -> Result<()> {
+    let status = output
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("workflow terminal result is missing status"))?;
+    if !KNOWN_TERMINAL_WORKFLOW_STATUSES.contains(&status) {
+        return Err(anyhow::anyhow!("non-terminal workflow status: {status}"));
+    }
+    if FAILURE_WORKFLOW_STATUSES.contains(&status) {
+        let message = extract_workflow_error_message(output)
+            .unwrap_or_else(|| format!("workflow status: {status}"));
+        return Err(anyhow::anyhow!("workflow failed ({status}): {message}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1434,7 +1567,8 @@ mod tests {
         let (mut response, item_count) = drain_workflow_stream(response, |item, _| {
             matches!(&item.item, Some(Item::Data(_)))
         })
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(item_count, 1);
         assert!(
@@ -1458,12 +1592,163 @@ mod tests {
             }),
         ]);
 
-        let (_, item_count) = drain_workflow_stream(response, |item, _| {
+        let error = drain_workflow_stream(response, |item, _| {
             matches!(&item.item, Some(Item::Data(_)))
         })
-        .await;
+        .await
+        .unwrap_err();
 
-        assert_eq!(item_count, 1);
+        assert!(error.to_string().contains("stream disconnected"));
+    }
+
+    #[tokio::test]
+    async fn drain_workflow_stream_rejects_eof_before_end() {
+        use futures::stream;
+        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+
+        let response = stream::iter([Ok(ResultOutputItem {
+            item: Some(Item::Data(b"before-eof".to_vec())),
+        })]);
+
+        let error = drain_workflow_stream(response, |item, _| {
+            matches!(&item.item, Some(Item::Data(_)))
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("ended before End"));
+    }
+
+    #[test]
+    fn final_collected_overrides_data_for_terminal_validation() {
+        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+
+        let mut terminal_output = WorkflowTerminalOutput::default();
+        terminal_output.update(&ResultOutputItem {
+            item: Some(Item::Data(b"completed".to_vec())),
+        });
+        terminal_output.update(&ResultOutputItem {
+            item: Some(Item::FinalCollected(b"faulted".to_vec())),
+        });
+
+        assert_eq!(
+            terminal_output.terminal_output_bytes(),
+            Some(b"faulted".as_slice())
+        );
+    }
+
+    #[test]
+    fn final_collected_is_not_overwritten_by_late_data() {
+        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+
+        let mut terminal_output = WorkflowTerminalOutput::default();
+        terminal_output.update(&ResultOutputItem {
+            item: Some(Item::FinalCollected(b"faulted".to_vec())),
+        });
+        terminal_output.update(&ResultOutputItem {
+            item: Some(Item::Data(b"completed".to_vec())),
+        });
+
+        assert_eq!(
+            terminal_output.terminal_output_bytes(),
+            Some(b"faulted".as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_execution_error_is_returned_after_cleanup() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&cleanup_called);
+        let error = finish_workflow_execution(
+            Err::<(), _>(anyhow::anyhow!("enqueue rejected")),
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(cleanup_called.load(Ordering::SeqCst));
+        assert!(error.to_string().contains("enqueue rejected"));
+    }
+
+    #[tokio::test]
+    async fn successful_workflow_execution_requires_successful_cleanup() {
+        let error = finish_workflow_execution(Ok(()), async {
+            Err::<(), _>(anyhow::anyhow!("worker deletion rejected"))
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to delete temporary workflow worker")
+        );
+    }
+
+    #[test]
+    fn workflow_status_validation_is_skipped_without_result_schema() {
+        assert!(decode_workflow_terminal_output(b"completed", None).is_none());
+    }
+
+    #[test]
+    fn streaming_display_is_closed_when_stream_fails() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let ended_with_count = Arc::new(AtomicUsize::new(usize::MAX));
+        let end_count = Arc::clone(&ended_with_count);
+        let error = finish_workflow_stream_display(
+            Err::<(), _>(anyhow::anyhow!("stream disconnected")),
+            2,
+            move |item_count| end_count.store(item_count, Ordering::SeqCst),
+        )
+        .unwrap_err();
+
+        assert_eq!(ended_with_count.load(Ordering::SeqCst), 2);
+        assert!(error.to_string().contains("stream disconnected"));
+    }
+
+    #[test]
+    fn workflow_terminal_output_rejects_non_terminal_status() {
+        let error = validate_workflow_terminal_output(&json!({"status": "Running"})).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("non-terminal workflow status: Running")
+        );
+    }
+
+    #[test]
+    fn workflow_terminal_output_accepts_completed_and_suspended_states() {
+        for status in ["Completed", "Cancelled", "Waiting"] {
+            validate_workflow_terminal_output(&json!({"status": status})).unwrap();
+        }
+    }
+
+    #[test]
+    fn workflow_terminal_output_rejects_faulted() {
+        let error = validate_workflow_terminal_output(&json!({
+            "status": "Faulted",
+            "errorMessage": "clone failed"
+        }))
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("workflow failed (Faulted): clone failed")
+        );
     }
 
     // --- clap parse tests: CreateWorkflow ---
