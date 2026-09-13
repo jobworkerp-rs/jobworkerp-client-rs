@@ -235,6 +235,40 @@ impl JobworkerpClientWrapper {
         }
     }
 
+    /// Execute a pre-registered worker with a caller-owned enqueue unique key.
+    pub async fn execute_worker_by_name_with_uniq_key(
+        &self,
+        worker_name: &str,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        uniq_key: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let (_worker_id, worker_data) = self
+            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Worker not found: worker_name='{worker_name}'"))?;
+        let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
+        let args_json =
+            shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
+        let output = self
+            .enqueue_with_json_and_uniq_key(
+                None,
+                Arc::new(HashMap::new()),
+                &worker_data,
+                args_json,
+                self.request_timeout()
+                    .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
+                using,
+                uniq_key,
+            )
+            .await?;
+        if is_workflow_runner {
+            check_workflow_output_status(output)
+        } else {
+            Ok(output)
+        }
+    }
+
     /// Streaming-first enqueue of a pre-registered worker by name: resolves the worker by name and
     /// enqueues it via the streaming path so the job_id is available before the job finishes.
     /// Returns the immediate job_id plus the terminal-outcome future.
@@ -270,6 +304,42 @@ impl JobworkerpClientWrapper {
         };
         let (job_id, terminal) = self
             .enqueue_stream_first(worker_data, args_json, using, chunk_merge)
+            .await?;
+        let terminal = wrap_terminal_with_workflow_status_check(terminal, is_workflow_runner);
+        Ok((job_id, terminal))
+    }
+
+    /// Streaming-first execution with a caller-owned enqueue unique key.
+    pub async fn execute_worker_by_name_stream_first_with_uniq_key(
+        &self,
+        worker_name: &str,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        uniq_key: Option<&str>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        let (_worker_id, worker_data) = self
+            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Worker not found: worker_name='{worker_name}'"))?;
+        let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
+        let args_json =
+            shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
+        let chunk_merge = if is_workflow_runner {
+            StreamChunkMerge::LastWins
+        } else {
+            StreamChunkMerge::Concat
+        };
+        let (job_id, terminal) = self
+            .enqueue_stream_first_with_uniq_key(
+                worker_data,
+                args_json,
+                using,
+                chunk_merge,
+                uniq_key,
+            )
             .await?;
         let terminal = wrap_terminal_with_workflow_status_check(terminal, is_workflow_runner);
         Ok((job_id, terminal))
@@ -377,12 +447,28 @@ impl JobworkerpClientWrapper {
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
     )> {
+        self.enqueue_stream_first_with_uniq_key(worker_data, args_json, using, chunk_merge, None)
+            .await
+    }
+
+    pub async fn enqueue_stream_first_with_uniq_key(
+        &self,
+        worker_data: WorkerData,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        chunk_merge: StreamChunkMerge,
+        uniq_key: Option<&str>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
         let timeout_sec = self
             .request_timeout()
             .map(|t| t.as_secs())
             .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC);
         // Own `using` so the fallback future (which may outlive this call) can capture it.
         let using_owned = using.map(std::string::ToString::to_string);
+        let uniq_key_owned = uniq_key.map(std::string::ToString::to_string);
 
         // Resolve the runner's args/result schema, then encode args against the args schema
         // (same as the Direct path does).
@@ -405,6 +491,7 @@ impl JobworkerpClientWrapper {
                 None,
                 None,
                 using,
+                uniq_key_owned.as_deref(),
             )
             .await;
 
@@ -443,47 +530,86 @@ impl JobworkerpClientWrapper {
                     });
                 Ok((job_id, fut))
             }
-            Err(status) => match classify_stream_enqueue_error(&status) {
-                StreamEnqueueFailure::Terminal {
-                    job_id,
-                    status: result_status,
-                    output,
-                } => {
-                    // The outcome is already fully resolved here; wrap it in a ready future rather
-                    // than allocating an async block that immediately returns.
-                    let outcome = JobTerminalOutcome {
+            Err(status) => {
+                if uniq_key.is_some()
+                    && matches!(
+                        status.code(),
+                        tonic::Code::AlreadyExists | tonic::Code::Aborted
+                    )
+                {
+                    return Err(anyhow::Error::new(
+                        crate::error::UniqueEnqueueError::from_tonic_status(status),
+                    ));
+                }
+                match classify_stream_enqueue_error(&status) {
+                    StreamEnqueueFailure::Terminal {
                         job_id,
                         status: result_status,
-                        output: serde_json::Value::String(
-                            String::from_utf8_lossy(&output).into_owned(),
-                        ),
-                    };
-                    let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
-                        Box::pin(futures::future::ready(Ok(outcome)));
-                    Ok((job_id, fut))
+                        output,
+                    } => {
+                        // The outcome is already fully resolved here; wrap it in a ready future rather
+                        // than allocating an async block that immediately returns.
+                        let outcome = JobTerminalOutcome {
+                            job_id,
+                            status: result_status,
+                            output: serde_json::Value::String(
+                                String::from_utf8_lossy(&output).into_owned(),
+                            ),
+                        };
+                        let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
+                            Box::pin(futures::future::ready(Ok(outcome)));
+                        Ok((job_id, fut))
+                    }
+                    StreamEnqueueFailure::NotStreamable(e) => {
+                        // Runner does not support streaming: fall back to the blocking Direct path.
+                        // job_id is only known once that terminal future resolves.
+                        tracing::debug!(
+                            "stream enqueue not available, falling back to Direct: {e}"
+                        );
+                        let client = self.clone();
+                        let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
+                            Box::pin(async move {
+                                client
+                                    .enqueue_with_json_and_job_id_and_uniq_key(
+                                        None,
+                                        Arc::new(HashMap::new()),
+                                        &worker_data,
+                                        args_json,
+                                        timeout_sec,
+                                        using_owned.as_deref(),
+                                        uniq_key_owned.as_deref(),
+                                    )
+                                    .await
+                            });
+                        Ok((None, fut))
+                    }
                 }
-                StreamEnqueueFailure::NotStreamable(e) => {
-                    // Runner does not support streaming: fall back to the blocking Direct path.
-                    // job_id is only known once that terminal future resolves.
-                    tracing::debug!("stream enqueue not available, falling back to Direct: {e}");
-                    let client = self.clone();
-                    let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
-                        Box::pin(async move {
-                            client
-                                .enqueue_with_json_and_job_id(
-                                    None,
-                                    Arc::new(HashMap::new()),
-                                    &worker_data,
-                                    args_json,
-                                    timeout_sec,
-                                    using_owned.as_deref(),
-                                )
-                                .await
-                        });
-                    Ok((None, fut))
-                }
-            },
+            }
         }
+    }
+
+    pub async fn find_latest_job_result_by_uniq_key(
+        &self,
+        uniq_key: &str,
+    ) -> Result<Option<crate::jobworkerp::data::JobResult>> {
+        self.find_latest_job_result_by_uniq_key_with_context(
+            None,
+            Arc::new(HashMap::new()),
+            uniq_key,
+        )
+        .await
+    }
+
+    async fn find_latest_job_result_by_uniq_key_with_context(
+        &self,
+        cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        uniq_key: &str,
+    ) -> Result<Option<crate::jobworkerp::data::JobResult>> {
+        <Self as UseJobworkerpClientHelper>::find_latest_job_result_by_uniq_key(
+            self, cx, metadata, uniq_key,
+        )
+        .await
     }
 
     /// Resolve the worker's runner row and return true when it is the WORKFLOW runner. Used by

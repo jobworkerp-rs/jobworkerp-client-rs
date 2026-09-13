@@ -9,17 +9,18 @@
 
 use super::UseJobworkerpClient;
 use crate::command::to_request;
-use crate::error::ClientError;
+use crate::error::{ClientError, UniqueEnqueueError};
 use crate::jobworkerp::data::{
-    JobId, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem, ResultStatus,
-    RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData, WorkerId,
+    JobId, JobResult, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem,
+    ResultStatus, RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData,
+    WorkerId,
 };
 use crate::jobworkerp::function::data::{
     FunctionSet, FunctionSetData, FunctionSetId, FunctionSpecs,
 };
 use crate::jobworkerp::function::service::{FindFunctionRequest, FindFunctionSetRequest};
 use crate::jobworkerp::service::{
-    CreateJobResponse, JobRequest, RunnerNameRequest, WorkerNameRequest,
+    CreateJobResponse, FindJobResultListRequest, JobRequest, RunnerNameRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
 use anyhow::{Context, Result};
@@ -163,14 +164,14 @@ fn build_worker_data_from_json(
     }
 }
 
-/// Build `JobRequest` from parameters
-fn build_job_request(
+fn build_job_request_with_uniq_key(
     worker_id: WorkerId,
     args: Vec<u8>,
     timeout_sec: u64,
     run_after_time: Option<i64>,
     priority: Option<Priority>,
     using: Option<&str>,
+    uniq_key: Option<&str>,
 ) -> JobRequest {
     JobRequest {
         args,
@@ -181,6 +182,7 @@ fn build_job_request(
         priority: priority.map(|p| p as i32),
         run_after_time,
         using: using.map(std::string::ToString::to_string),
+        uniq_key: uniq_key.map(std::string::ToString::to_string),
         ..Default::default()
     }
 }
@@ -864,9 +866,35 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
+        self.enqueue_and_get_result_worker_job_with_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            args,
+            timeout_sec,
+            run_after_time,
+            priority,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_and_get_result_worker_job_with_uniq_key(
+        &self,
+        cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u64,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+        using: Option<&str>,
+        uniq_key: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<JobResultData>> + Send {
         async move {
             Ok(self
-                .enqueue_worker_job(
+                .enqueue_worker_job_with_uniq_key(
                     cx,
                     metadata,
                     worker_data,
@@ -875,6 +903,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     run_after_time,
                     priority,
                     using,
+                    uniq_key,
                 )
                 .await?
                 .result
@@ -895,9 +924,35 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
         using: Option<&str>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
+        self.enqueue_and_get_output_worker_job_with_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            args,
+            timeout_sec,
+            run_after_time,
+            priority,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_and_get_output_worker_job_with_uniq_key(
+        &self,
+        cx: Option<&opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u64,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+        using: Option<&str>,
+        uniq_key: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send {
         async move {
             let res = self
-                .enqueue_and_get_result_worker_job(
+                .enqueue_and_get_result_worker_job_with_uniq_key(
                     cx,
                     metadata,
                     worker_data,
@@ -906,6 +961,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     run_after_time,
                     priority,
                     using,
+                    uniq_key,
                 )
                 .await?;
             if res.status() == ResultStatus::Success && res.output.is_some() {
@@ -940,6 +996,33 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         priority: Option<Priority>,
         using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send + 'a {
+        self.enqueue_worker_job_with_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            args,
+            timeout_sec,
+            run_after_time,
+            priority,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_worker_job_with_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u64,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+        using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Result<CreateJobResponse>> + Send + 'a {
+        let has_uniq_key = uniq_key.is_some();
         async move {
             let worker = self
                 .find_or_create_worker(cx, metadata.clone(), worker_data)
@@ -949,13 +1032,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     "Worker ID not found after find_or_create_worker".to_string(),
                 )
             })?;
-            let job_request_payload = build_job_request(
+            let job_request_payload = build_job_request_with_uniq_key(
                 worker_id,
                 args,
                 timeout_sec,
                 run_after_time,
                 priority,
                 using,
+                uniq_key,
             );
             let tonic_request = tonic::Request::new(job_request_payload);
             let client_clone = self.jobworkerp_client().clone();
@@ -973,7 +1057,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .enqueue(to_request(&metadata, req)?)
                         .await
                         .map(tonic::Response::into_inner)
-                        .map_err(|e| ClientError::from_tonic_status(e).into())
+                        .map_err(|e| {
+                            if has_uniq_key {
+                                anyhow::Error::new(UniqueEnqueueError::from_tonic_status(e))
+                            } else {
+                                ClientError::from_tonic_status(e).into()
+                            }
+                        })
                 },
             )
             .await
@@ -998,6 +1088,39 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         )>,
     > + Send
     + 'a {
+        self.enqueue_stream_worker_job_with_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            args,
+            timeout_sec,
+            run_after_time,
+            priority,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_stream_worker_job_with_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        args: Vec<u8>,
+        timeout_sec: u64,
+        run_after_time: Option<i64>,
+        priority: Option<Priority>,
+        using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
+    ) -> impl std::future::Future<
+        Output = Result<(
+            tonic::metadata::MetadataMap,
+            tonic::Streaming<crate::jobworkerp::data::ResultOutputItem>,
+        )>,
+    > + Send
+    + 'a {
+        let has_uniq_key = uniq_key.is_some();
         async move {
             let worker = self
                 .find_or_create_worker(cx, metadata.clone(), worker_data)
@@ -1007,13 +1130,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     "Worker ID not found after find_or_create_worker".to_string(),
                 )
             })?;
-            let job_request_payload = build_job_request(
+            let job_request_payload = build_job_request_with_uniq_key(
                 worker_id,
                 args,
                 timeout_sec,
                 run_after_time,
                 priority,
                 using,
+                uniq_key,
             );
             let tonic_request = tonic::Request::new(job_request_payload);
             let client_clone = self.jobworkerp_client().clone();
@@ -1031,7 +1155,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         .await
                         .enqueue_for_stream(to_request(&metadata_clone, req)?)
                         .await
-                        .map_err(ClientError::from_tonic_status)?;
+                        .map_err(|e| {
+                            if has_uniq_key {
+                                anyhow::Error::new(UniqueEnqueueError::from_tonic_status(e))
+                            } else {
+                                ClientError::from_tonic_status(e).into()
+                            }
+                        })?;
                     let metadata_map = response.metadata().clone();
                     let streaming = response.into_inner();
                     Ok((metadata_map, streaming))
@@ -1055,6 +1185,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         run_after_time: Option<i64>,
         priority: Option<Priority>,
         using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
     ) -> impl std::future::Future<
         Output = std::result::Result<
             (
@@ -1073,13 +1204,14 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             let worker_id = worker
                 .id
                 .ok_or_else(|| tonic::Status::internal("Worker ID not found"))?;
-            let job_request_payload = build_job_request(
+            let job_request_payload = build_job_request_with_uniq_key(
                 worker_id,
                 args,
                 timeout_sec,
                 run_after_time,
                 priority,
                 using,
+                uniq_key,
             );
             let response = self
                 .jobworkerp_client()
@@ -1475,6 +1607,28 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         job_timeout_sec: u64,
         using: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
+        self.enqueue_with_json_and_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            job_args,
+            job_timeout_sec,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_with_json_and_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u64,
+        using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send + 'a {
         async move {
             let runner_id = worker_data.runner_id.ok_or_else(|| {
                 ClientError::InvalidParameter(format!(
@@ -1544,7 +1698,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 };
 
                 let output_bytes = self
-                    .enqueue_and_get_output_worker_job(
+                    .enqueue_and_get_output_worker_job_with_uniq_key(
                         cx,
                         metadata,
                         worker_data,
@@ -1553,6 +1707,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         None,
                         None,
                         using,
+                        uniq_key,
                     )
                     .await?;
 
@@ -1576,6 +1731,29 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         job_args: serde_json::Value,
         job_timeout_sec: u64,
         using: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Result<JobTerminalOutcome<serde_json::Value>>> + Send + 'a
+    {
+        self.enqueue_with_json_and_job_id_and_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            job_args,
+            job_timeout_sec,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_with_json_and_job_id_and_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u64,
+        using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<JobTerminalOutcome<serde_json::Value>>> + Send + 'a
     {
         async move {
@@ -1620,7 +1798,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             };
 
             let response = self
-                .enqueue_worker_job(
+                .enqueue_worker_job_with_uniq_key(
                     cx,
                     metadata,
                     worker_data,
@@ -1629,6 +1807,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     None,
                     None,
                     using,
+                    uniq_key,
                 )
                 .await?;
             let job_id = response.id;
@@ -1754,6 +1933,35 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
         )>,
     > + Send
     + 'a {
+        self.enqueue_stream_with_json_and_uniq_key(
+            cx,
+            metadata,
+            worker_data,
+            job_args,
+            job_timeout_sec,
+            using,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_stream_with_json_and_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        worker_data: &'a WorkerData,
+        job_args: serde_json::Value,
+        job_timeout_sec: u64,
+        using: Option<&'a str>,
+        uniq_key: Option<&'a str>,
+    ) -> impl std::future::Future<
+        Output = Result<(
+            Option<JobId>,
+            tonic::Streaming<ResultOutputItem>,
+            Option<MessageDescriptor>,
+        )>,
+    > + Send
+    + 'a {
         async move {
             let runner_id = worker_data.runner_id.ok_or_else(|| {
                 ClientError::InvalidParameter(format!(
@@ -1823,7 +2031,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 };
 
                 let (meta_map, streaming) = self
-                    .enqueue_stream_worker_job(
+                    .enqueue_stream_worker_job_with_uniq_key(
                         cx,
                         metadata,
                         worker_data,
@@ -1832,6 +2040,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                         None,
                         None,
                         using,
+                        uniq_key,
                     )
                     .await?;
 
@@ -1856,6 +2065,53 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 ))
                 .into())
             }
+        }
+    }
+
+    /// Find the latest persisted result for an enqueue unique key.
+    ///
+    /// The server sorts results by end time when no explicit sort is supplied. Limiting the
+    /// request to one result keeps recovery lookups bounded while preserving the result payload.
+    fn find_latest_job_result_by_uniq_key<'a>(
+        &'a self,
+        cx: Option<&'a opentelemetry::Context>,
+        metadata: Arc<HashMap<String, String>>,
+        uniq_key: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<JobResult>>> + Send + 'a {
+        async move {
+            let client_clone = self.jobworkerp_client().clone();
+            let request = FindJobResultListRequest {
+                worker_ids: vec![],
+                statuses: vec![],
+                start_time_from: None,
+                start_time_to: None,
+                end_time_from: None,
+                end_time_to: None,
+                priorities: vec![],
+                uniq_key: Some(uniq_key.to_string()),
+                limit: Some(1),
+                offset: Some(0),
+                sort_by: None,
+                ascending: Some(false),
+            };
+            Self::trace_grpc_client_with_request(
+                cx.cloned(),
+                "jobworkerp-client",
+                "find_latest_job_result_by_uniq_key",
+                "find_list_by",
+                tonic::Request::new(request),
+                move |request| async move {
+                    let response = client_clone
+                        .job_result_client()
+                        .await
+                        .find_list_by(to_request(&metadata, request)?)
+                        .await
+                        .map_err(ClientError::from_tonic_status)?;
+                    let mut stream = response.into_inner();
+                    Ok(stream.message().await?)
+                },
+            )
+            .await
         }
     }
 
@@ -2160,11 +2416,12 @@ mod tests {
     }
 
     #[test]
-    fn build_job_request_keeps_multi_day_timeout_in_u64_milliseconds() {
-        let request = build_job_request(
+    fn build_job_request_with_uniq_key_keeps_multi_day_timeout_in_u64_milliseconds() {
+        let request = build_job_request_with_uniq_key(
             WorkerId { value: 1 },
             vec![],
             72 * 24 * 60 * 60,
+            None,
             None,
             None,
             None,
@@ -2174,10 +2431,48 @@ mod tests {
     }
 
     #[test]
-    fn build_job_request_saturates_at_the_u64_millisecond_limit() {
-        let request = build_job_request(WorkerId { value: 1 }, vec![], u64::MAX, None, None, None);
+    fn build_job_request_with_uniq_key_saturates_at_the_u64_millisecond_limit() {
+        let request = build_job_request_with_uniq_key(
+            WorkerId { value: 1 },
+            vec![],
+            u64::MAX,
+            None,
+            None,
+            None,
+            None,
+        );
 
         assert_eq!(request.timeout, Some(u64::MAX));
+    }
+
+    #[test]
+    fn build_job_request_with_uniq_key_preserves_the_key() {
+        let request = build_job_request_with_uniq_key(
+            WorkerId { value: 1 },
+            vec![],
+            60,
+            None,
+            None,
+            None,
+            Some("operation-key"),
+        );
+
+        assert_eq!(request.uniq_key.as_deref(), Some("operation-key"));
+    }
+
+    #[test]
+    fn build_job_request_without_uniq_key_preserves_legacy_behavior() {
+        let request = build_job_request_with_uniq_key(
+            WorkerId { value: 1 },
+            vec![],
+            60,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(request.uniq_key, None);
     }
 
     #[test]

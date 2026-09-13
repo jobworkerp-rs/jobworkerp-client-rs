@@ -1,5 +1,28 @@
 use thiserror::Error;
 
+/// Errors that callers can act on when an enqueue uses a unique key.
+#[derive(Debug, Error)]
+pub enum UniqueEnqueueError {
+    #[error("job with the unique key already exists: {0}")]
+    Duplicate(String),
+    #[error("enqueue was aborted: {0}")]
+    Aborted(String),
+    #[error(transparent)]
+    Client(#[from] ClientError),
+}
+
+impl UniqueEnqueueError {
+    #[must_use]
+    pub fn from_tonic_status(status: tonic::Status) -> Self {
+        let message = status.message().to_string();
+        match status.code() {
+            tonic::Code::AlreadyExists => Self::Duplicate(message),
+            tonic::Code::Aborted => Self::Aborted(message),
+            _ => Self::Client(ClientError::from_tonic_status(status)),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("NotFound({0})")]
@@ -79,6 +102,21 @@ mod tests {
         let status = tonic::Status::already_exists("resource exists");
         let error = ClientError::from_tonic_status(status);
         assert!(matches!(error, ClientError::Conflict(_)));
+    }
+
+    #[test]
+    fn unique_enqueue_error_distinguishes_already_exists() {
+        let error =
+            UniqueEnqueueError::from_tonic_status(tonic::Status::already_exists("resource exists"));
+        assert!(
+            matches!(error, UniqueEnqueueError::Duplicate(message) if message == "resource exists")
+        );
+    }
+
+    #[test]
+    fn unique_enqueue_error_keeps_aborted_separate() {
+        let error = UniqueEnqueueError::from_tonic_status(tonic::Status::aborted("aborted"));
+        assert!(matches!(error, UniqueEnqueueError::Aborted(message) if message == "aborted"));
     }
 
     #[test]
