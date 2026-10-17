@@ -164,6 +164,22 @@ fn build_worker_data_from_json(
     }
 }
 
+/// Prepare a `WorkerData` using the same defaults and parameter handling as
+/// [`UseJobworkerpClientHelper::create_worker_with_runner_id`], without writing
+/// it to the server.
+pub fn prepare_worker_with_runner_id(
+    name: &str,
+    runner_id: RunnerId,
+    settings: Vec<u8>,
+    worker_params: Option<serde_json::Value>,
+) -> WorkerData {
+    if let Some(serde_json::Value::Object(params)) = worker_params {
+        build_worker_data_from_json(name, runner_id, settings, &params)
+    } else {
+        build_worker_data_default(name, runner_id, settings)
+    }
+}
+
 fn build_job_request_with_uniq_key(
     worker_id: WorkerId,
     args: Vec<u8>,
@@ -1302,11 +1318,12 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
     ) -> impl std::future::Future<Output = Result<Worker>> + Send {
         let worker_name = worker_name.to_owned();
         async move {
-            let worker = if let Some(serde_json::Value::Object(obj)) = worker_params {
-                build_worker_data_from_json(&worker_name, runner_id, runner_settings, &obj)
-            } else {
-                build_worker_data_default(&worker_name, runner_id, runner_settings)
-            };
+            let worker = prepare_worker_with_runner_id(
+                &worker_name,
+                runner_id,
+                runner_settings,
+                worker_params,
+            );
 
             self.upsert_worker(cx, metadata, &worker).await
         }
@@ -2659,5 +2676,65 @@ mod workflow_context_schema_tests {
             "#,
         );
         ensure_workflow_context_field(&desc, &json!({"input":"{}"})).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod worker_preparation_tests {
+    use super::{DEFAULT_RETRY_POLICY, build_worker_data_default, prepare_worker_with_runner_id};
+    use crate::jobworkerp::data::{QueueType, ResponseType, RunnerId};
+    use serde_json::json;
+
+    #[test]
+    fn prepare_worker_with_runner_id_preserves_json_parameters() {
+        let worker = prepare_worker_with_runner_id(
+            "fallback-name",
+            RunnerId { value: 42 },
+            vec![1, 2, 3],
+            Some(json!({
+                "name": "configured-name",
+                "description": "LLM worker",
+                "channel": "priority",
+                "queue_type": "DB_ONLY",
+                "store_success": true,
+                "store_failure": false,
+                "use_static": true,
+            })),
+        );
+
+        assert_eq!(worker.name, "configured-name");
+        assert_eq!(worker.description, "LLM worker");
+        assert_eq!(worker.runner_id, Some(RunnerId { value: 42 }));
+        assert_eq!(worker.runner_settings, vec![1, 2, 3]);
+        assert_eq!(worker.channel.as_deref(), Some("priority"));
+        assert_eq!(worker.queue_type, QueueType::DbOnly as i32);
+        assert_eq!(worker.response_type, ResponseType::Direct as i32);
+        assert!(worker.store_success);
+        assert!(!worker.store_failure);
+        assert!(worker.use_static);
+        assert_eq!(worker.retry_policy, Some(DEFAULT_RETRY_POLICY));
+        assert!(worker.broadcast_results);
+    }
+
+    #[test]
+    fn non_object_worker_params_keep_default_builder_fallback() {
+        let runner_id = RunnerId { value: 7 };
+        let settings = vec![9, 8, 7];
+        let expected = build_worker_data_default("worker", runner_id, settings.clone());
+
+        for worker_params in [
+            Some(json!(null)),
+            Some(json!("invalid-shape")),
+            Some(json!([])),
+        ] {
+            assert_eq!(
+                prepare_worker_with_runner_id("worker", runner_id, settings.clone(), worker_params,),
+                expected,
+            );
+        }
+        assert_eq!(
+            prepare_worker_with_runner_id("worker", runner_id, settings, None),
+            expected,
+        );
     }
 }
