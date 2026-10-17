@@ -279,15 +279,113 @@ where
     register_workers_from_yaml_str(client, cx, metadata, &raw, &base_dir).await
 }
 
+/// Prepare every worker in raw YAML without upserting any worker.
+/// `base_dir` is used to resolve `$file: <relative-path>` includes.
+///
+/// This resolves runners and validates/encodes all definitions before
+/// returning, but does not call `upsert_worker`. It is useful when the
+/// caller needs to inspect or combine the prepared data before writing it.
+///
+/// Env expansion, YAML parsing, duplicate-name detection, `$file:`
+/// resolution, enum parsing, runner lookup (cached per runner name),
+/// `runner_settings` schema parsing, and proto encoding all run before
+/// returning. Runner lookup is the only operation that accesses the
+/// server; if any validation step fails, the function returns an error
+/// without writing a worker.
+pub async fn prepare_workers_from_yaml_str<C>(
+    client: &C,
+    cx: Option<&opentelemetry::Context>,
+    metadata: Arc<HashMap<String, String>>,
+    raw_yaml: &str,
+    base_dir: &Path,
+) -> Result<Vec<WorkerData>>
+where
+    C: UseJobworkerpClientHelper + Send + Sync,
+{
+    let expanded = yaml_common::expand_env(raw_yaml)?;
+    let doc: WorkersYaml =
+        serde_yaml::from_str(&expanded).with_context(|| "failed to parse workers YAML")?;
+
+    let WorkersYaml { defaults, workers } = doc;
+    let prepared = prepare_workers(client, cx, metadata, workers, &defaults, base_dir).await?;
+    Ok(prepared
+        .into_iter()
+        .map(|worker| worker.worker_data)
+        .collect())
+}
+
+/// Prepared workers together with the immutable source snapshot and the
+/// bounded payload accounting used during preparation.
+#[derive(Debug)]
+pub struct PreparedWorkersWithSourceSnapshot {
+    pub workers: Vec<WorkerData>,
+    pub source_snapshot: yaml_common::BoundedYamlSourceSnapshot,
+    pub source_count: usize,
+    pub string_count: usize,
+    /// Counts source bytes, expanded text, and prepared logical strings.
+    /// This is a payload budget rather than a heap/RSS estimate.
+    pub charged_bytes: usize,
+}
+
+/// Prepare workers from an immutable root snapshot through the same standard
+/// YAML loader used by [`prepare_workers_from_yaml_str`], with explicit source,
+/// string-count, and byte limits. `$file` contents are read once during this
+/// call, added to the returned snapshot, and charged to the same budget.
+pub async fn prepare_workers_from_yaml_snapshot<C>(
+    client: &C,
+    cx: Option<&opentelemetry::Context>,
+    metadata: Arc<HashMap<String, String>>,
+    mut source_snapshot: yaml_common::BoundedYamlSourceSnapshot,
+    limits: yaml_common::BoundedYamlSourceLimits,
+) -> Result<PreparedWorkersWithSourceSnapshot>
+where
+    C: UseJobworkerpClientHelper + Send + Sync,
+{
+    source_snapshot.begin_preparation()?;
+    let mut budget = yaml_common::BoundedYamlBudget::new(limits, source_snapshot.charged_bytes())?;
+    let expanded = yaml_common::expand_env_with_overrides_bounded(
+        source_snapshot.contents(),
+        &HashMap::new(),
+        budget.remaining_bytes(),
+    )?;
+    budget.charge_string(expanded.len())?;
+    let doc: WorkersYaml =
+        serde_yaml::from_str(&expanded).with_context(|| "failed to parse workers YAML")?;
+    let WorkersYaml { defaults, workers } = doc;
+    let base_dir = source_snapshot.base_dir().to_path_buf();
+    let prepared = prepare_workers_with_lookup_inner(
+        workers,
+        &defaults,
+        &base_dir,
+        Some((&mut source_snapshot, &mut budget)),
+        |name| {
+            let metadata = metadata.clone();
+            async move { client.find_runner_or_error(cx, metadata, &name).await }
+        },
+    )
+    .await?;
+
+    Ok(PreparedWorkersWithSourceSnapshot {
+        workers: prepared
+            .into_iter()
+            .map(|worker| worker.worker_data)
+            .collect(),
+        source_count: budget.source_count(),
+        string_count: budget.string_count(),
+        charged_bytes: budget.charged_bytes(),
+        source_snapshot,
+    })
+}
+
 /// Variant of [`register_workers_from_yaml`] that takes raw YAML text.
 /// `base_dir` is used to resolve `$file: <relative-path>` includes.
 ///
-/// **Pre-validation (no upsert RPCs):** env expansion, YAML parsing,
-/// duplicate-name detection, `$file:` resolution, enum parsing,
-/// runner lookup (cached per runner_name to avoid redundant RPCs),
-/// `runner_settings` schema parsing, and proto encoding all run
-/// before the first `upsert_worker`. If any step fails, no worker is
-/// registered.
+/// **Pre-validation (no upsert RPCs):** delegates to
+/// [`prepare_workers_from_yaml_str`], so env expansion, YAML parsing,
+/// duplicate-name detection, `$file:` resolution, enum parsing, runner
+/// lookup (cached per runner name), `runner_settings` schema parsing, and
+/// proto encoding all run before the first `upsert_worker`. If any step
+/// fails, no worker is registered.
 ///
 /// **Registration:** validated specs are upserted sequentially in
 /// YAML order. A network failure mid-loop can still leave earlier
@@ -303,27 +401,20 @@ pub async fn register_workers_from_yaml_str<C>(
 where
     C: UseJobworkerpClientHelper + Send + Sync,
 {
-    let expanded = yaml_common::expand_env(raw_yaml)?;
-    let doc: WorkersYaml =
-        serde_yaml::from_str(&expanded).with_context(|| "failed to parse workers YAML")?;
-
-    let WorkersYaml { defaults, workers } = doc;
     let prepared =
-        prepare_workers(client, cx, metadata.clone(), workers, &defaults, base_dir).await?;
+        prepare_workers_from_yaml_str(client, cx, metadata.clone(), raw_yaml, base_dir).await?;
 
     let mut out = HashMap::with_capacity(prepared.len());
-    for prep in prepared {
+    for worker_data in prepared {
+        let worker_name = worker_data.name.clone();
         let worker = client
-            .upsert_worker(cx, metadata.clone(), &prep.worker_data)
+            .upsert_worker(cx, metadata.clone(), &worker_data)
             .await
-            .with_context(|| format!("registering worker '{}' failed", prep.worker_name))?;
+            .with_context(|| format!("registering worker '{}' failed", worker_name))?;
         let id = worker.id.ok_or_else(|| {
-            ClientError::RuntimeError(format!(
-                "upsert_worker returned no id for {}",
-                prep.worker_name
-            ))
+            ClientError::RuntimeError(format!("upsert_worker returned no id for {}", worker_name))
         })?;
-        out.insert(prep.worker_name, id);
+        out.insert(worker_name, id);
     }
     Ok(out)
 }
@@ -374,12 +465,32 @@ async fn prepare_workers_with_lookup<F, Fut>(
     workers: Vec<WorkerSpec>,
     defaults: &WorkerDefaults,
     base_dir: &Path,
+    runner_lookup: F,
+) -> Result<Vec<PreparedWorker>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(RunnerId, RunnerData)>>,
+{
+    prepare_workers_with_lookup_inner(workers, defaults, base_dir, None, runner_lookup).await
+}
+
+async fn prepare_workers_with_lookup_inner<F, Fut>(
+    workers: Vec<WorkerSpec>,
+    defaults: &WorkerDefaults,
+    base_dir: &Path,
+    mut bounded: Option<(
+        &mut yaml_common::BoundedYamlSourceSnapshot,
+        &mut yaml_common::BoundedYamlBudget,
+    )>,
     mut runner_lookup: F,
 ) -> Result<Vec<PreparedWorker>>
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = Result<(RunnerId, RunnerData)>>,
 {
+    if let Some((_, budget)) = bounded.as_mut() {
+        charge_default_strings(defaults, budget)?;
+    }
     let mut seen: HashSet<String> = HashSet::with_capacity(workers.len());
     for spec in &workers {
         if !seen.insert(spec.name.clone()) {
@@ -401,20 +512,34 @@ where
     let mut runner_cache: HashMap<String, RunnerCacheEntry> = HashMap::new();
     let mut out = Vec::with_capacity(workers.len());
     for mut spec in workers {
+        if let Some((_, budget)) = bounded.as_mut() {
+            charge_worker_spec_strings(&spec, budget)?;
+        }
         let worker_name = spec.name.clone();
         let runner_name = std::mem::take(&mut spec.runner);
         let settings_yaml = std::mem::take(&mut spec.settings);
         let settings_json = match settings_yaml {
             Some(mut yaml) => {
-                yaml_common::resolve_includes(&mut yaml, base_dir).await?;
-                Some(serde_json::to_value(&yaml).with_context(|| {
+                if let Some((snapshot, budget)) = bounded.as_mut() {
+                    yaml_common::resolve_includes_bounded(&mut yaml, snapshot, budget).await?;
+                } else {
+                    yaml_common::resolve_includes(&mut yaml, base_dir).await?;
+                }
+                let json = serde_json::to_value(&yaml).with_context(|| {
                     format!("converting runner_settings of worker '{worker_name}' to JSON failed")
-                })?)
+                })?;
+                if let Some((_, budget)) = bounded.as_mut() {
+                    charge_json_value_strings(&json, budget)?;
+                }
+                Some(json)
             }
             None => None,
         };
         let mut worker_data = build_worker_data(&spec, defaults)
             .with_context(|| format!("validating worker '{worker_name}' failed"))?;
+        if let Some((_, budget)) = bounded.as_mut() {
+            charge_worker_data_strings(&worker_data, budget)?;
+        }
 
         if !runner_cache.contains_key(&runner_name) {
             let (rid, rdata) = runner_lookup(runner_name.clone()).await.with_context(|| {
@@ -458,6 +583,9 @@ where
             worker_data.runner_settings = Vec::new();
         }
         worker_data.runner_id = Some(entry.runner_id);
+        if let Some((_, budget)) = bounded.as_mut() {
+            budget.charge_bytes(worker_data.runner_settings.len(), "encoded worker settings")?;
+        }
 
         out.push(PreparedWorker {
             worker_name,
@@ -465,6 +593,94 @@ where
         });
     }
     Ok(out)
+}
+
+fn charge_default_strings(
+    defaults: &WorkerDefaults,
+    budget: &mut yaml_common::BoundedYamlBudget,
+) -> Result<()> {
+    for value in [
+        defaults.channel.as_deref(),
+        defaults.queue_type.as_deref(),
+        defaults.response_type.as_deref(),
+        defaults
+            .retry_policy
+            .as_ref()
+            .map(|policy| policy.kind.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        budget.charge_string(value.len())?;
+    }
+    Ok(())
+}
+
+fn charge_worker_spec_strings(
+    spec: &WorkerSpec,
+    budget: &mut yaml_common::BoundedYamlBudget,
+) -> Result<()> {
+    for value in [
+        Some(spec.name.as_str()),
+        Some(spec.runner.as_str()),
+        spec.description.as_deref(),
+        spec.channel.as_deref(),
+        spec.queue_type.as_deref(),
+        spec.response_type.as_deref(),
+        spec.retry_policy
+            .as_ref()
+            .map(|policy| policy.kind.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        budget.charge_string(value.len())?;
+    }
+    Ok(())
+}
+
+fn charge_json_value_strings(
+    value: &serde_json::Value,
+    budget: &mut yaml_common::BoundedYamlBudget,
+) -> Result<()> {
+    // Count the exact standard JSON shape passed to the proto encoder. YAML
+    // tags serialize as map keys, so counting the YAML tree alone misses them.
+    match value {
+        serde_json::Value::String(value) => budget.charge_string(value.len()),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                charge_json_value_strings(value, budget)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                budget.charge_string(key.len())?;
+                charge_json_value_strings(value, budget)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn charge_worker_data_strings(
+    worker: &WorkerData,
+    budget: &mut yaml_common::BoundedYamlBudget,
+) -> Result<()> {
+    for value in [
+        Some(worker.name.as_str()),
+        Some(worker.description.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        budget.charge_string(value.len())?;
+    }
+    if let Some(channel) = &worker.channel {
+        budget.charge_string(channel.len())?;
+    }
+    Ok(())
 }
 
 /// Cached per-runner data shared across all workers in one batch:
@@ -731,8 +947,639 @@ fn parse_retry_policy(spec: &RetryPolicySpec) -> Result<RetryPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::helper::UseJobworkerpClientHelper;
+    use crate::client::{JobworkerpClient, UseJobworkerpClient};
     use serial_test::serial;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingClient {
+        upserts: std::sync::Arc<Mutex<Vec<WorkerData>>>,
+    }
+
+    impl UseJobworkerpClient for RecordingClient {
+        fn jobworkerp_client(&self) -> &JobworkerpClient {
+            panic!("the recording client must not make gRPC calls")
+        }
+    }
+
+    impl command_utils::trace::Tracing for RecordingClient {}
+
+    impl UseJobworkerpClientHelper for RecordingClient {
+        fn find_runner_or_error<'a>(
+            &'a self,
+            _cx: Option<&'a opentelemetry::Context>,
+            _metadata: Arc<HashMap<String, String>>,
+            runner_name: &'a str,
+        ) -> impl std::future::Future<Output = Result<(RunnerId, RunnerData)>> + Send + 'a
+        where
+            Self: Send + Sync,
+        {
+            let runner_name = runner_name.to_owned();
+            async move {
+                if runner_name == "MISSING" {
+                    Err(anyhow!("runner not found: {runner_name}"))
+                } else {
+                    Ok(proto_runner(&runner_name, 17))
+                }
+            }
+        }
+
+        fn upsert_worker<'a>(
+            &'a self,
+            _cx: Option<&'a opentelemetry::Context>,
+            _metadata: Arc<HashMap<String, String>>,
+            worker_data: &'a WorkerData,
+        ) -> impl std::future::Future<Output = Result<crate::jobworkerp::data::Worker>> + Send + 'a
+        {
+            let upserts = self.upserts.clone();
+            let worker_data = worker_data.clone();
+            async move {
+                let mut recorded = upserts.lock().expect("upsert lock must not be poisoned");
+                recorded.push(worker_data.clone());
+                Ok(crate::jobworkerp::data::Worker {
+                    id: Some(WorkerId {
+                        value: recorded.len() as i64,
+                    }),
+                    data: Some(worker_data),
+                })
+            }
+        }
+    }
+
+    fn test_metadata() -> Arc<HashMap<String, String>> {
+        Arc::new(HashMap::new())
+    }
+
+    #[tokio::test]
+    async fn public_prepare_api_resolves_workers_without_writing_and_matches_registration() {
+        let client = RecordingClient::default();
+        let yaml = r"
+defaults:
+  response_type: NO_RESULT
+  store_failure: true
+workers:
+  - name: first
+    runner: TESTRUNNER
+    settings:
+      host: llm.example
+      port: 9100
+  - name: second
+    runner: TESTRUNNER
+    description: second worker
+";
+        let base_dir = empty_base_dir();
+
+        let prepared =
+            prepare_workers_from_yaml_str(&client, None, test_metadata(), yaml, &base_dir)
+                .await
+                .expect("all worker definitions should be prepared");
+
+        assert_eq!(prepared.len(), 2);
+        assert_eq!(prepared[0].name, "first");
+        assert_eq!(prepared[0].runner_id, Some(RunnerId { value: 17 }));
+        assert!(!prepared[0].runner_settings.is_empty());
+        assert_eq!(prepared[0].response_type, ResponseType::NoResult as i32);
+        assert!(prepared[0].store_failure);
+        assert_eq!(prepared[1].name, "second");
+        assert_eq!(prepared[1].runner_id, Some(RunnerId { value: 17 }));
+        assert!(prepared[1].runner_settings.is_empty());
+        assert!(
+            client.upserts.lock().unwrap().is_empty(),
+            "prepare-only API must not issue worker writes"
+        );
+
+        let registered =
+            register_workers_from_yaml_str(&client, None, test_metadata(), yaml, &base_dir)
+                .await
+                .expect("the existing registration API should upsert the prepared workers");
+        assert_eq!(registered.len(), 2);
+        assert_eq!(registered["first"], WorkerId { value: 1 });
+        assert_eq!(registered["second"], WorkerId { value: 2 });
+        assert_eq!(*client.upserts.lock().unwrap(), prepared);
+    }
+
+    #[tokio::test]
+    async fn bounded_prepare_uses_the_root_snapshot_after_the_path_changes() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.yaml");
+        let original = r#"
+defaults:
+  response_type: NO_RESULT
+workers:
+  - name: snapshotted
+    runner: TESTRUNNER
+    description: "%{BOUNDED_WORKER_TEST_DESCRIPTION:-from-default}"
+    settings: { host: llm.example, port: 9100 }
+"#;
+        tokio::fs::write(&path, original).await.unwrap();
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+            .await
+            .unwrap();
+
+        tokio::fs::write(&path, "this is no longer the manifest\n")
+            .await
+            .unwrap();
+        let prepared = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            snapshot,
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .expect("preparation must use the immutable root contents");
+
+        assert_eq!(prepared.workers.len(), 1);
+        assert_eq!(prepared.workers[0].name, "snapshotted");
+        assert_eq!(prepared.workers[0].description, "from-default");
+        assert_eq!(prepared.workers[0].runner_id, Some(RunnerId { value: 17 }));
+        assert!(!prepared.workers[0].runner_settings.is_empty());
+        assert_eq!(prepared.source_snapshot.contents(), original);
+        assert_eq!(prepared.source_snapshot.source_path(), path);
+        assert_eq!(prepared.source_snapshot.base_dir(), dir.path());
+        assert_eq!(prepared.source_count, 1);
+        assert!(prepared.charged_bytes >= original.len());
+        assert_eq!(prepared.string_count, 10);
+        assert!(client.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_source_read_accepts_exact_limit_and_rejects_one_byte_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.yaml");
+        let raw = format!("#{}\nworkers: []\n", "large-comment".repeat(32));
+        tokio::fs::write(&path, &raw).await.unwrap();
+
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&path, raw.len())
+            .await
+            .expect("exactly-at-limit roots must be accepted");
+        assert_eq!(snapshot.contents(), raw);
+        assert_eq!(snapshot.charged_bytes(), raw.len());
+
+        let error = yaml_common::BoundedYamlSourceSnapshot::read(&path, raw.len() - 1)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:?}").contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn bounded_prepare_rejects_oversized_include_before_any_worker_write() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workers.yaml");
+        let include = dir.path().join("settings.yaml");
+        let raw = "workers:\n  - name: bounded\n    runner: TESTRUNNER\n    settings:\n      host:\n        $file: settings.yaml\n";
+        let included = "host: llm.example\nport: 9100\n";
+        tokio::fs::write(&root, raw).await.unwrap();
+        tokio::fs::write(&include, included).await.unwrap();
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, raw.len())
+            .await
+            .unwrap();
+        let limits = bounded_limits(raw.len() * 2 + included.len() - 1);
+
+        let error =
+            prepare_workers_from_yaml_snapshot(&client, None, test_metadata(), snapshot, limits)
+                .await
+                .unwrap_err();
+
+        assert!(format!("{error:?}").contains("limit"));
+        assert!(client.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_prepare_rejects_missing_includes_and_excess_source_count() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workers.yaml");
+        let missing_yaml = "workers:\n  - name: missing\n    runner: TESTRUNNER\n    settings:\n      host:\n        $file: missing.txt\n";
+        tokio::fs::write(&root, missing_yaml).await.unwrap();
+        let missing_snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, 4096)
+            .await
+            .unwrap();
+        let missing = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            missing_snapshot,
+            bounded_limits(4096),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{missing:?}").contains("missing.txt"));
+
+        tokio::fs::write(dir.path().join("first.txt"), "one")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("second.txt"), "two")
+            .await
+            .unwrap();
+        let two_includes = "workers:\n  - name: count\n    runner: TESTRUNNER\n    settings:\n      first: {$file: first.txt}\n      second: {$file: second.txt}\n";
+        tokio::fs::write(&root, two_includes).await.unwrap();
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, 4096)
+            .await
+            .unwrap();
+        let error = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            snapshot,
+            yaml_common::BoundedYamlSourceLimits {
+                max_sources: 2,
+                max_strings: 64,
+                max_bytes: 4096,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(format!("{error:?}").contains("source limit"));
+        assert!(client.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn bounded_prepare_rejects_env_expansion_before_parsing_or_writes() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.yaml");
+        let raw = "workers:\n  - name: bounded\n    runner: TESTRUNNER\n    description: '%{BOUNDED_WORKER_TEST_LARGE}'\n";
+        tokio::fs::write(&path, raw).await.unwrap();
+        // SAFETY: this environment variable is serialized by `#[serial]`.
+        unsafe {
+            std::env::set_var("BOUNDED_WORKER_TEST_LARGE", "secret-value".repeat(128));
+        }
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&path, raw.len())
+            .await
+            .unwrap();
+        let error = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            snapshot,
+            bounded_limits(raw.len() * 2 + 32),
+        )
+        .await
+        .unwrap_err();
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("BOUNDED_WORKER_TEST_LARGE");
+        }
+
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("limit"));
+        assert!(!diagnostic.contains("secret-value"));
+        assert!(client.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_prepare_preserves_standard_include_and_schema_validation() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workers.yaml");
+        let include = dir.path().join("settings.yaml");
+        let raw = r#"
+workers:
+  - name: included
+    runner: TESTRUNNER
+    settings:
+      host:
+        $file: settings.yaml
+      port: 9100
+"#;
+        tokio::fs::write(&root, raw).await.unwrap();
+        tokio::fs::write(&include, "llm.example\n").await.unwrap();
+        let snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, 16 * 1024)
+            .await
+            .unwrap();
+        let independent_root_snapshot = snapshot.clone();
+        tokio::fs::write(&include, "captured-at-first-prepare\n")
+            .await
+            .unwrap();
+
+        let prepared = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            snapshot,
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .expect("bounded preparation must use the regular YAML and schema path");
+        assert_eq!(prepared.workers[0].name, "included");
+        assert_eq!(prepared.source_count, 2);
+        assert_eq!(prepared.source_snapshot.included_sources().len(), 1);
+        assert_eq!(
+            prepared.source_snapshot.included_sources()[0].contents(),
+            "captured-at-first-prepare\n"
+        );
+        assert!(!prepared.workers[0].runner_settings.is_empty());
+        assert!(client.upserts.lock().unwrap().is_empty());
+
+        let exact_limit = prepared.charged_bytes;
+        let exact_snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, 16 * 1024)
+            .await
+            .unwrap();
+        let exact = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            exact_snapshot,
+            bounded_limits(exact_limit),
+        )
+        .await
+        .expect("the reported payload charge must be an accepted exact limit");
+        assert_eq!(exact.charged_bytes, exact_limit);
+
+        let over_snapshot = yaml_common::BoundedYamlSourceSnapshot::read(&root, 16 * 1024)
+            .await
+            .unwrap();
+        let over = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            over_snapshot,
+            bounded_limits(exact_limit - 1),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{over:?}").contains("limit"));
+        assert!(client.upserts.lock().unwrap().is_empty());
+
+        tokio::fs::write(&include, "mutated after preparation\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.source_snapshot.included_sources()[0].contents(),
+            "captured-at-first-prepare\n"
+        );
+
+        tokio::fs::write(&include, "changed-after-capture\n")
+            .await
+            .unwrap();
+        let repeated = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            prepared.source_snapshot.clone(),
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .expect_err("a captured source snapshot must not read includes a second time");
+        assert!(format!("{repeated:?}").contains("already prepared"));
+        assert_eq!(
+            repeated.downcast_ref::<yaml_common::BoundedYamlSnapshotError>(),
+            Some(&yaml_common::BoundedYamlSnapshotError::AlreadyPrepared)
+        );
+        assert_eq!(prepared.source_snapshot.included_sources().len(), 1);
+        assert_eq!(prepared.source_count, 2);
+
+        let independent = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            independent_root_snapshot,
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .expect("a deliberate clone of an unprepared root is an independent load");
+        assert_eq!(independent.source_count, 2);
+        assert_eq!(
+            independent.source_snapshot.included_sources()[0].contents(),
+            "changed-after-capture\n"
+        );
+        let control = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&root, 16 * 1024)
+                .await
+                .unwrap(),
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .unwrap();
+        assert_eq!(independent.source_count, control.source_count);
+        assert_eq!(independent.string_count, control.string_count);
+        assert_eq!(independent.charged_bytes, control.charged_bytes);
+    }
+
+    #[tokio::test]
+    async fn bounded_settings_count_the_standard_json_strings_from_yaml_tags() {
+        let client = RecordingClient::default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.yaml");
+        let ordinary = r#"
+workers:
+  - name: tagged
+    runner: TESTRUNNER
+    settings: { host: llm.example, port: 9100 }
+"#;
+        tokio::fs::write(&path, ordinary).await.unwrap();
+        let baseline = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .unwrap();
+        assert_eq!(baseline.string_count, 8);
+
+        let mut exact_limits = bounded_limits(16 * 1024);
+        exact_limits.max_strings = baseline.string_count;
+        let exact = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            exact_limits,
+        )
+        .await
+        .expect("the canonical settings-map string count must accept its exact limit");
+        assert_eq!(exact.string_count, baseline.string_count);
+
+        let mut one_under_limits = bounded_limits(16 * 1024);
+        one_under_limits.max_strings = baseline.string_count - 1;
+        let one_under = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            one_under_limits,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{one_under:?}").contains("string limit"));
+
+        let tagged = r#"
+workers:
+  - name: tagged
+    runner: TESTRUNNER
+    settings: { host: !Injected llm.example, port: 9100 }
+"#;
+        let tagged_value: serde_yaml::Value =
+            serde_yaml::from_str("!Injected llm.example").unwrap();
+        assert_eq!(
+            serde_json::to_value(tagged_value).unwrap(),
+            serde_json::json!({"!Injected": "llm.example"})
+        );
+        tokio::fs::write(&path, tagged).await.unwrap();
+        let mut limits = bounded_limits(16 * 1024);
+        limits.max_strings = baseline.string_count;
+        let error = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            limits,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("string limit"),
+            "tag accounting should exhaust the string budget before schema encoding: {error:?}"
+        );
+
+        let nested_tagged = r#"
+workers:
+  - name: tagged
+    runner: TESTRUNNER
+    settings:
+      host: !Injected [one, { nested: two }]
+      port: 9100
+"#;
+        tokio::fs::write(&path, nested_tagged).await.unwrap();
+        let mut nested_limits = bounded_limits(16 * 1024);
+        nested_limits.max_strings = baseline.string_count;
+        let nested_error = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            nested_limits,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{nested_error:?}").contains("string limit"));
+
+        let tagged_map = r#"
+workers:
+  - name: forged
+    runner: TESTRUNNER
+    settings: !Forged { host: llm.example, port: 9100 }
+"#;
+        let forged: serde_yaml::Value =
+            serde_yaml::from_str("!Forged {host: llm.example}").unwrap();
+        assert_eq!(
+            serde_json::to_value(forged).unwrap(),
+            serde_json::json!({"!Forged": {"host": "llm.example"}})
+        );
+        tokio::fs::write(&path, tagged_map).await.unwrap();
+        let error = prepare_workers_from_yaml_snapshot(
+            &client,
+            None,
+            test_metadata(),
+            yaml_common::BoundedYamlSourceSnapshot::read(&path, 16 * 1024)
+                .await
+                .unwrap(),
+            bounded_limits(16 * 1024),
+        )
+        .await
+        .unwrap_err();
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("encoding runner_settings"));
+        assert!(diagnostic.contains("unknown") || diagnostic.contains("Forged"));
+    }
+
+    #[test]
+    fn bounded_json_accounting_counts_tag_keys_and_nested_map_sequence_strings_once() {
+        let tagged: serde_yaml::Value =
+            serde_yaml::from_str("!Top {nested: [alpha, {leaf: beta}]}").unwrap();
+        let json = serde_json::to_value(tagged).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"!Top": {"nested": ["alpha", {"leaf": "beta"}]}})
+        );
+
+        let exact_limits = yaml_common::BoundedYamlSourceLimits {
+            max_sources: 1,
+            max_strings: 5,
+            max_bytes: 23,
+        };
+        let mut exact = yaml_common::BoundedYamlBudget::new(exact_limits, 0).unwrap();
+        charge_json_value_strings(&json, &mut exact).unwrap();
+        assert_eq!(exact.string_count(), 5);
+        assert_eq!(exact.charged_bytes(), 23);
+
+        let too_few_strings = yaml_common::BoundedYamlSourceLimits {
+            max_strings: 4,
+            ..exact_limits
+        };
+        let mut string_budget = yaml_common::BoundedYamlBudget::new(too_few_strings, 0).unwrap();
+        assert!(
+            charge_json_value_strings(&json, &mut string_budget)
+                .unwrap_err()
+                .to_string()
+                .contains("string limit")
+        );
+
+        let too_few_bytes = yaml_common::BoundedYamlSourceLimits {
+            max_bytes: 22,
+            ..exact_limits
+        };
+        let mut byte_budget = yaml_common::BoundedYamlBudget::new(too_few_bytes, 0).unwrap();
+        assert!(
+            charge_json_value_strings(&json, &mut byte_budget)
+                .unwrap_err()
+                .to_string()
+                .contains("byte bounded YAML limit")
+        );
+    }
+
+    fn bounded_limits(max_bytes: usize) -> yaml_common::BoundedYamlSourceLimits {
+        yaml_common::BoundedYamlSourceLimits {
+            max_sources: 8,
+            max_strings: 64,
+            max_bytes,
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_later_definition_fails_before_any_worker_write() {
+        let client = RecordingClient::default();
+        let yaml = r"
+workers:
+  - name: valid
+    runner: TESTRUNNER
+  - name: invalid
+    runner: MISSING
+";
+
+        let error =
+            register_workers_from_yaml_str(&client, None, test_metadata(), yaml, &empty_base_dir())
+                .await
+                .expect_err("a missing runner must abort the entire batch");
+
+        assert!(format!("{error:?}").contains("MISSING"));
+        assert!(
+            client.upserts.lock().unwrap().is_empty(),
+            "failed pre-validation must leave all workers untouched"
+        );
+    }
 
     #[test]
     fn parses_minimal_yaml() {

@@ -25,6 +25,15 @@ pub async fn register_workers_from_yaml_str<C>(
     base_dir: &Path,         // used to resolve `$file:` includes
 ) -> Result<HashMap<String, WorkerId>>;
 
+// Validate and encode all definitions without upserting workers.
+pub async fn prepare_workers_from_yaml_str<C>(
+    client: &C,
+    cx: Option<&opentelemetry::Context>,
+    metadata: Arc<HashMap<String, String>>,
+    raw_yaml: &str,
+    base_dir: &Path,         // used to resolve `$file:` includes
+) -> Result<Vec<WorkerData>>;
+
 // Register a single worker without going through YAML.
 pub async fn register_worker<C>(
     client: &C,
@@ -34,7 +43,26 @@ pub async fn register_worker<C>(
     worker_data: WorkerData,
     settings_json: Option<&serde_json::Value>,
 ) -> Result<WorkerId>;
+
+// Build a worker with the existing helper defaults and JSON parameter rules.
+pub fn prepare_worker_with_runner_id(
+    name: &str,
+    runner_id: RunnerId,
+    settings: Vec<u8>,
+    worker_params: Option<serde_json::Value>,
+) -> WorkerData;
 ```
+
+`prepare_workers_from_yaml_str` performs env expansion, YAML parsing, `$file:` resolution,
+runner lookup, schema validation, and proto encoding, but never calls `upsert_worker`. Runner
+lookup RPCs can therefore occur; worker write RPCs do not. It returns a complete `WorkerData` for
+each YAML entry in document order. `register_workers_from_yaml_str` uses the same preparation
+path, then upserts those returned payloads sequentially.
+
+`prepare_worker_with_runner_id` is the side-effect-free counterpart to the helper's
+`create_worker_with_runner_id`: it uses the same builders and preserves their current defaults.
+Only object-valued `worker_params` are interpreted as JSON worker options; absent or non-object
+values use the same default builder as before.
 
 The `UseJobworkerpClientHelper` trait also exposes a `register_worker` method, so callers can invoke `client.register_worker(...)` alongside the other helpers; the implementation is a thin facade over the free function above.
 
