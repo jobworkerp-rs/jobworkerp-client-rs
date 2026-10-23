@@ -158,12 +158,13 @@ impl QueueTypeArg {
         }
     }
 
-    /// Server `WorkerOptions.QueueType` enum name expected by `normalize_enum`.
+    /// Server `CreateWorkflowArgs.WorkerOptions.QueueType` enum name expected by `normalize_enum`.
+    /// The server still accepts the deprecated `FORCED_RDB` alias for older clients.
     #[must_use]
     pub const fn as_proto_name(&self) -> &'static str {
         match self {
             Self::Normal => "NORMAL",
-            Self::DbOnly => "FORCED_RDB",
+            Self::DbOnly => "DB_ONLY",
             Self::WithBackup => "WITH_BACKUP",
         }
     }
