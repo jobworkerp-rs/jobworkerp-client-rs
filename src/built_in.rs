@@ -3,6 +3,9 @@ use anyhow::Result;
 use futures::stream::BoxStream;
 use tonic::async_trait;
 
+// `#[async_trait]` expands each async fn into a `#[must_use]` fn returning an
+// already `#[must_use]` boxed future, which trips this lint in generated code.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait RunnerTrait: Send + Sync {
     fn name(&self) -> String;

@@ -1948,8 +1948,7 @@ mod tests {
             None,
         );
         assert_eq!(v["channel"], json!("ch1"));
-        // DbOnly maps to the server's FORCED_RDB enum name.
-        assert_eq!(v["queue_type"], json!("FORCED_RDB"));
+        assert_eq!(v["queue_type"], json!("DB_ONLY"));
         assert_eq!(v["response_type"], json!("DIRECT"));
         assert_eq!(v["store_success"], json!(true));
         assert!(v.get("store_failure").is_none());
