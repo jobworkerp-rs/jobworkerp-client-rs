@@ -27,6 +27,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::Workflow => "WORKFLOW",
                 RunnerType::FunctionSetSelector => "FUNCTION_SET_SELECTOR",
                 RunnerType::Grpc => "GRPC",
+                RunnerType::Sandbox => "SANDBOX",
             }
             .to_string(),
             DisplayFormat::Card => match runner_type {
@@ -42,6 +43,7 @@ impl EnumFormatter<RunnerType> for RunnerTypeFormatter {
                 RunnerType::Workflow => "🔄 WORKFLOW",
                 RunnerType::FunctionSetSelector => "🔍 FUNCTION_SET_SELECTOR",
                 RunnerType::Grpc => "🔗 GRPC",
+                RunnerType::Sandbox => "📦 SANDBOX",
             }
             .to_string(),
             DisplayFormat::Json => runner_type.as_str_name().to_string(),
@@ -190,6 +192,47 @@ mod tests {
             formatter.format(RunnerType::Grpc, &DisplayFormat::Json),
             "GRPC"
         );
+
+        assert_eq!(
+            formatter.format(RunnerType::Sandbox, &DisplayFormat::Table),
+            "SANDBOX"
+        );
+        assert_eq!(
+            formatter.format(RunnerType::Sandbox, &DisplayFormat::Card),
+            "📦 SANDBOX"
+        );
+        assert_eq!(
+            formatter.format(RunnerType::Sandbox, &DisplayFormat::Json),
+            "SANDBOX"
+        );
+    }
+
+    #[test]
+    fn test_runner_to_json_uses_fallback_for_unknown_runner_type() {
+        let runner = runner_with_type(i32::MAX);
+
+        let json = runner_to_json(&runner, &DisplayFormat::Json, false);
+
+        assert_eq!(json["runner_type"], "PLUGIN");
+    }
+
+    #[test]
+    fn test_runner_to_json_formats_sandbox() {
+        let runner = runner_with_type(RunnerType::Sandbox as i32);
+
+        let json = runner_to_json(&runner, &DisplayFormat::Json, false);
+
+        assert_eq!(json["runner_type"], "SANDBOX");
+    }
+
+    fn runner_with_type(runner_type: i32) -> Runner {
+        Runner {
+            id: None,
+            data: Some(crate::jobworkerp::data::RunnerData {
+                runner_type,
+                ..Default::default()
+            }),
+        }
     }
 
     #[test]
