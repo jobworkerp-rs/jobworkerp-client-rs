@@ -574,13 +574,7 @@ impl JobCommand {
                     self.create_parent_span("jobworkerp-client", "JobCommand::EnqueueWorkflow");
                 let cx = Some(cx);
                 let workflow_context =
-                    match workflow_context_from_cli(context.as_deref(), context_file.as_deref()) {
-                        Ok(ctx) => ctx,
-                        Err(e) => {
-                            eprintln!("{e:#}");
-                            return Ok(());
-                        }
-                    };
+                    workflow_context_from_cli(context.as_deref(), context_file.as_deref())?;
 
                 let using = Some("run");
                 let runner = helper
@@ -822,13 +816,7 @@ impl JobCommand {
                     self.create_parent_span("jobworkerp-client", "JobCommand::CreateWorkflow");
                 let cx = Some(cx);
                 let workflow_context =
-                    match workflow_context_from_cli(context.as_deref(), context_file.as_deref()) {
-                        Ok(ctx) => ctx,
-                        Err(e) => {
-                            eprintln!("{e:#}");
-                            return Ok(());
-                        }
-                    };
+                    workflow_context_from_cli(context.as_deref(), context_file.as_deref())?;
 
                 let using = Some("create");
                 let runner = match helper
@@ -2015,6 +2003,62 @@ mod tests {
         assert!(msg.contains("failed to read workflow context file at"));
         assert!(msg.contains("missing-context.json"));
         assert!(!msg.contains("secret-value"));
+    }
+
+    // Accepts TCP connections without serving gRPC: enough for `JobworkerpClient::new` to connect,
+    // so command paths that fail before any RPC can be exercised without a jobworkerp server.
+    async fn client_without_server() -> crate::client::JobworkerpClient {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                sockets.push(socket);
+            }
+        });
+        crate::client::JobworkerpClient::new(format!("http://{addr}"), None)
+            .await
+            .expect("connect to idle listener")
+    }
+
+    async fn assert_missing_context_file_fails(subcommand_args: &[&str]) {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-context.json");
+        let mut args = vec!["test"];
+        args.extend_from_slice(subcommand_args);
+        args.extend(["--context-file", missing.to_str().unwrap()]);
+        let parsed = TestRoot::parse_from(args);
+
+        let err = parsed
+            .cmd
+            .execute(&client_without_server().await, Arc::new(HashMap::new()))
+            .await
+            .expect_err("unreadable context file must fail the command");
+        assert!(format!("{err:#}").contains("failed to read workflow context file at"));
+    }
+
+    #[tokio::test]
+    async fn enqueue_workflow_fails_when_context_file_is_unreadable() {
+        assert_missing_context_file_fails(&[
+            "enqueue-workflow",
+            "--workflow-file",
+            "wf.yaml",
+            "--input",
+            "{}",
+        ])
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_workflow_fails_when_context_file_is_unreadable() {
+        assert_missing_context_file_fails(&[
+            "create-workflow",
+            "--name",
+            "my-wf",
+            "--workflow-file",
+            "wf.yaml",
+        ])
+        .await;
     }
 
     // --- pure function tests: build_worker_options_json ---
