@@ -7,9 +7,10 @@
 )]
 
 use super::helper::{
-    JobTerminalOutcome, StreamChunkMerge, StreamEnqueueFailure, UseJobworkerpClientHelper,
-    classify_stream_enqueue_error, collect_stream_result_with, encode_job_args_against_descriptor,
-    ephemeral_worker_name, extract_job_id_from_metadata, extract_job_result_from_metadata,
+    CollectedStream, JobTerminalOutcome, StreamChunkMerge, StreamEnqueueFailure,
+    UseJobworkerpClientHelper, classify_stream_enqueue_error, collect_stream_output_with,
+    encode_job_args_against_descriptor, ephemeral_worker_name, extract_job_id_from_metadata,
+    extract_job_result_from_metadata,
 };
 use crate::{
     client::{JobworkerpClient, UseJobworkerpClient},
@@ -81,6 +82,31 @@ impl JobworkerpClientWrapper {
     #[must_use]
     pub const fn request_timeout(&self) -> Option<Duration> {
         self.jobworkerp_client.request_timeout
+    }
+    /// Job timeout in seconds sent to jobworkerp: an explicit value wins (`0` means unlimited),
+    /// otherwise the connection's request timeout, otherwise the client default.
+    fn resolve_job_timeout_sec(
+        job_timeout_sec: Option<u32>,
+        request_timeout: Option<Duration>,
+    ) -> u64 {
+        job_timeout_sec
+            .map(u64::from)
+            .or(request_timeout.map(|t| t.as_secs()))
+            .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC)
+    }
+    fn default_job_timeout_sec(&self) -> u64 {
+        Self::resolve_job_timeout_sec(None, self.request_timeout())
+    }
+    async fn find_required_worker_by_name(&self, worker_name: &str) -> Result<WorkerData> {
+        let (_worker_id, worker_data) = self
+            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Worker not found: worker_name='{worker_name}' on jobworkerp server"
+                )
+            })?;
+        Ok(worker_data)
     }
     /// WorkerData params used to upsert the ephemeral WORKFLOW worker. Shared by the blocking
     /// (`execute_workflow`) and streaming-first (`execute_workflow_stream_first`) entry points so
@@ -161,8 +187,7 @@ impl JobworkerpClientWrapper {
                     vec![],
                     Some(worker_params),
                     job_args,
-                    self.request_timeout()
-                        .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
+                    self.default_job_timeout_sec(),
                     using,
                 )
                 .await?;
@@ -205,14 +230,7 @@ impl JobworkerpClientWrapper {
         args_json: serde_json::Value,
         using: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let (_worker_id, worker_data) = self
-            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Worker not found: worker_name='{worker_name}' on jobworkerp server"
-                )
-            })?;
+        let worker_data = self.find_required_worker_by_name(worker_name).await?;
         let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
         let args_json =
             shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
@@ -223,8 +241,7 @@ impl JobworkerpClientWrapper {
                 Arc::new(HashMap::new()),
                 &worker_data,
                 args_json,
-                self.request_timeout()
-                    .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
+                self.default_job_timeout_sec(),
                 using,
             )
             .await?;
@@ -243,10 +260,7 @@ impl JobworkerpClientWrapper {
         using: Option<&str>,
         uniq_key: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let (_worker_id, worker_data) = self
-            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Worker not found: worker_name='{worker_name}'"))?;
+        let worker_data = self.find_required_worker_by_name(worker_name).await?;
         let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
         let args_json =
             shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
@@ -256,8 +270,7 @@ impl JobworkerpClientWrapper {
                 Arc::new(HashMap::new()),
                 &worker_data,
                 args_json,
-                self.request_timeout()
-                    .map_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC, |t| t.as_secs()),
+                self.default_job_timeout_sec(),
                 using,
                 uniq_key,
             )
@@ -281,32 +294,31 @@ impl JobworkerpClientWrapper {
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
     )> {
-        let (_worker_id, worker_data) = self
-            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Worker not found: worker_name='{}' on jobworkerp server",
-                    worker_name
-                )
-            })?;
-        let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
-        let args_json =
-            shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
-        // WORKFLOW workers stream snapshot-style chunks (each chunk is a full WorkflowResult);
-        // every other runner type today streams deltas (LLM token chunks). Picking the wrong
-        // merge collapses snapshots into garbled concatenations (e.g.
-        // `status: "RunningRunningFaulted"`).
-        let chunk_merge = if is_workflow_runner {
-            StreamChunkMerge::LastWins
-        } else {
-            StreamChunkMerge::Concat
-        };
-        let (job_id, terminal) = self
-            .enqueue_stream_first(worker_data, args_json, using, chunk_merge)
-            .await?;
-        let terminal = wrap_terminal_with_workflow_status_check(terminal, is_workflow_runner);
-        Ok((job_id, terminal))
+        self.execute_worker_by_name_stream_first_inner(worker_name, args_json, using, None, None)
+            .await
+    }
+
+    /// `execute_worker_by_name_stream_first` with a per-job timeout.
+    ///
+    /// See [`Self::enqueue_stream_first_with_job_timeout`] for `job_timeout_sec` semantics.
+    pub async fn execute_worker_by_name_stream_first_with_job_timeout(
+        &self,
+        worker_name: &str,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        job_timeout_sec: Option<u32>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        self.execute_worker_by_name_stream_first_inner(
+            worker_name,
+            args_json,
+            using,
+            None,
+            job_timeout_sec,
+        )
+        .await
     }
 
     /// Streaming-first execution with a caller-owned enqueue unique key.
@@ -320,25 +332,48 @@ impl JobworkerpClientWrapper {
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
     )> {
-        let (_worker_id, worker_data) = self
-            .find_worker_by_name(None, Arc::new(HashMap::new()), worker_name)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Worker not found: worker_name='{worker_name}'"))?;
+        self.execute_worker_by_name_stream_first_inner(
+            worker_name,
+            args_json,
+            using,
+            uniq_key,
+            None,
+        )
+        .await
+    }
+
+    async fn execute_worker_by_name_stream_first_inner(
+        &self,
+        worker_name: &str,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        uniq_key: Option<&str>,
+        job_timeout_sec: Option<u32>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        let worker_data = self.find_required_worker_by_name(worker_name).await?;
         let is_workflow_runner = self.is_workflow_runner(&worker_data).await?;
         let args_json =
             shape_args_for_workflow_runner(is_workflow_runner, &worker_data.name, args_json)?;
+        // WORKFLOW workers stream snapshot-style chunks (each chunk is a full WorkflowResult);
+        // every other runner type today streams deltas (LLM token chunks). Picking the wrong
+        // merge collapses snapshots into garbled concatenations (e.g.
+        // `status: "RunningRunningFaulted"`).
         let chunk_merge = if is_workflow_runner {
             StreamChunkMerge::LastWins
         } else {
             StreamChunkMerge::Concat
         };
         let (job_id, terminal) = self
-            .enqueue_stream_first_with_uniq_key(
+            .enqueue_stream_first_inner(
                 worker_data,
                 args_json,
                 using,
                 chunk_merge,
                 uniq_key,
+                job_timeout_sec,
             )
             .await?;
         let terminal = wrap_terminal_with_workflow_status_check(terminal, is_workflow_runner);
@@ -353,6 +388,23 @@ impl JobworkerpClientWrapper {
         workflow_url: &str,
         input: &str,
         channel: Option<&str>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        self.execute_workflow_stream_first_with_job_timeout(workflow_url, input, channel, None)
+            .await
+    }
+
+    /// `execute_workflow_stream_first` with a per-job timeout.
+    ///
+    /// See [`Self::enqueue_stream_first_with_job_timeout`] for `job_timeout_sec` semantics.
+    pub async fn execute_workflow_stream_first_with_job_timeout(
+        &self,
+        workflow_url: &str,
+        input: &str,
+        channel: Option<&str>,
+        job_timeout_sec: Option<u32>,
     ) -> Result<(
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
@@ -384,7 +436,13 @@ impl JobworkerpClientWrapper {
         // terminal future owns the cleanup (the worker must outlive the running job).
         // WORKFLOW URL path is always a WORKFLOW worker → snapshot semantics.
         let (job_id, terminal) = match self
-            .enqueue_stream_first(worker_data, job_args, using, StreamChunkMerge::LastWins)
+            .enqueue_stream_first_with_job_timeout(
+                worker_data,
+                job_args,
+                using,
+                StreamChunkMerge::LastWins,
+                job_timeout_sec,
+            )
             .await
         {
             Ok(enqueued) => enqueued,
@@ -437,6 +495,9 @@ impl JobworkerpClientWrapper {
     /// `enqueue_for_stream`), this transparently falls back to the blocking Direct
     /// `enqueue_with_json_and_job_id`; in that case the returned immediate `job_id` is `None`
     /// (it is only known once the terminal future resolves).
+    ///
+    /// A stream the server ends with an in-band error (e.g. a timeout) resolves to
+    /// `ResultStatus::MaxRetry` with the server's error message as output.
     pub async fn enqueue_stream_first(
         &self,
         worker_data: WorkerData,
@@ -447,7 +508,7 @@ impl JobworkerpClientWrapper {
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
     )> {
-        self.enqueue_stream_first_with_uniq_key(worker_data, args_json, using, chunk_merge, None)
+        self.enqueue_stream_first_inner(worker_data, args_json, using, chunk_merge, None, None)
             .await
     }
 
@@ -462,10 +523,54 @@ impl JobworkerpClientWrapper {
         Option<JobId>,
         BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
     )> {
-        let timeout_sec = self
-            .request_timeout()
-            .map(|t| t.as_secs())
-            .unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT_SEC);
+        self.enqueue_stream_first_inner(worker_data, args_json, using, chunk_merge, uniq_key, None)
+            .await
+    }
+
+    /// `enqueue_stream_first` with a per-job timeout.
+    ///
+    /// `job_timeout_sec` is the job's `JobRequest.timeout` in seconds: `None` uses the connection's
+    /// request timeout (or `DEFAULT_REQUEST_TIMEOUT_SEC` when unset) and `Some(0)` disables the
+    /// timeout. jobworkerp applies it to a streaming job as the maximum gap between chunks (not
+    /// the total duration). When the runner cannot stream, the blocking Direct fallback is still
+    /// bounded by the connection's request timeout (`JobworkerpClientWrapper::new`'s `request_timeout`): the client stops waiting
+    /// after that even if the job keeps running, so create the client without a request timeout
+    /// when longer or unlimited job timeouts must be awaited.
+    pub async fn enqueue_stream_first_with_job_timeout(
+        &self,
+        worker_data: WorkerData,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        chunk_merge: StreamChunkMerge,
+        job_timeout_sec: Option<u32>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        self.enqueue_stream_first_inner(
+            worker_data,
+            args_json,
+            using,
+            chunk_merge,
+            None,
+            job_timeout_sec,
+        )
+        .await
+    }
+
+    async fn enqueue_stream_first_inner(
+        &self,
+        worker_data: WorkerData,
+        args_json: serde_json::Value,
+        using: Option<&str>,
+        chunk_merge: StreamChunkMerge,
+        uniq_key: Option<&str>,
+        job_timeout_sec: Option<u32>,
+    ) -> Result<(
+        Option<JobId>,
+        BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>>,
+    )> {
+        let timeout_sec = Self::resolve_job_timeout_sec(job_timeout_sec, self.request_timeout());
         // Own `using` so the fallback future (which may outlive this call) can capture it.
         let using_owned = using.map(std::string::ToString::to_string);
         let uniq_key_owned = uniq_key.map(std::string::ToString::to_string);
@@ -507,12 +612,25 @@ impl JobworkerpClientWrapper {
                 // available for the returned tuple below.
                 let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
                     Box::pin(async move {
-                        let output = collect_stream_result_with(
+                        let output = match collect_stream_output_with(
                             &mut stream,
                             result_descriptor.as_ref(),
                             chunk_merge,
                         )
-                        .await?;
+                        .await?
+                        {
+                            CollectedStream::Completed(output) => output,
+                            // An in-band stream failure (e.g. idle timeout) is never persisted nor
+                            // reported in a JobResult trailer, so the fallbacks below would wrongly
+                            // resolve it to Success. Report it like a non-retried failed job.
+                            CollectedStream::Failed(error) => {
+                                return Ok(JobTerminalOutcome::failure(
+                                    job_id,
+                                    ResultStatus::MaxRetry,
+                                    error,
+                                ));
+                            }
+                        };
                         // Terminal status: trailer JobResult > initial header JobResult >
                         // find_list_by_job_id > Success (workflow leaves no result only on success).
                         let trailer_result = match stream.trailers().await {
@@ -549,13 +667,11 @@ impl JobworkerpClientWrapper {
                     } => {
                         // The outcome is already fully resolved here; wrap it in a ready future rather
                         // than allocating an async block that immediately returns.
-                        let outcome = JobTerminalOutcome {
+                        let outcome = JobTerminalOutcome::failure(
                             job_id,
-                            status: result_status,
-                            output: serde_json::Value::String(
-                                String::from_utf8_lossy(&output).into_owned(),
-                            ),
-                        };
+                            result_status,
+                            String::from_utf8_lossy(&output).into_owned(),
+                        );
                         let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
                             Box::pin(futures::future::ready(Ok(outcome)));
                         Ok((job_id, fut))
@@ -831,9 +947,10 @@ fn downgrade_workflow_outcome_if_failed(
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    // Empty status here means the streaming output was not WorkflowResult-shaped (e.g. a
-    // descriptor mismatch fell back to raw bytes). Treat that as "no signal" and skip the warn,
-    // so the noise floor stays low for non-workflow data paths.
+    // Empty status here means either `Completed` (the proto3 enum default, omitted by the default
+    // JSON mapping in `decode_output_to_json`) or output that was not WorkflowResult-shaped (e.g. a
+    // descriptor mismatch fell back to raw bytes). Neither is a failure, so treat it as "no signal"
+    // and skip the warn to keep the noise floor low.
     if !status.is_empty() {
         warn_if_unexpected_terminal_workflow_status(status, "stream-first workflow terminal");
     }
@@ -997,34 +1114,94 @@ fn shape_args_for_workflow_runner(
 mod tests {
     use super::*;
 
-    // Requires a running jobworkerp at localhost:9000 with the COMMAND runner. Verifies that the
-    // streaming-first enqueue returns the job_id immediately (well before the long-running job
-    // terminates), which is the property the enqueue-time ExecutionRef recording relies on.
-    // Run with: cargo test -p jobworkerp-client stream_first_returns_job_id_before_terminal -- --ignored --nocapture
-    #[tokio::test]
-    #[ignore]
-    async fn stream_first_returns_job_id_before_terminal() {
-        use crate::client::helper::UseJobworkerpClientHelper;
-        use crate::jobworkerp::data::{QueueType, ResponseType, RetryType, WorkerData};
-        use std::time::Instant;
+    #[test]
+    fn unset_job_timeout_without_request_timeout_uses_default() {
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(None, None),
+            JobworkerpClientWrapper::DEFAULT_REQUEST_TIMEOUT_SEC
+        );
+    }
 
-        let client = JobworkerpClientWrapper::new("http://localhost:9000", Some(60))
+    #[test]
+    fn unset_job_timeout_follows_request_timeout() {
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(None, Some(Duration::from_secs(60))),
+            60
+        );
+    }
+
+    #[test]
+    fn zero_job_timeout_stays_unlimited_regardless_of_request_timeout() {
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(Some(0), None),
+            0
+        );
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(
+                Some(0),
+                Some(Duration::from_secs(60))
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn explicit_job_timeout_overrides_request_timeout() {
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(
+                Some(5),
+                Some(Duration::from_secs(60))
+            ),
+            5
+        );
+        assert_eq!(
+            JobworkerpClientWrapper::resolve_job_timeout_sec(
+                Some(u32::MAX),
+                Some(Duration::from_secs(60))
+            ),
+            u64::from(u32::MAX)
+        );
+    }
+
+    // Ignored integration tests connect to `http://$TEST_JOBWORKERP_HOST:$TEST_JOBWORKERP_PORT`
+    // (defaults: localhost, 9000). The host is a bare hostname, not a URL, so the same variables
+    // can be shared with the conductor e2e tests.
+    async fn connect_test_jobworkerp() -> JobworkerpClientWrapper {
+        let host =
+            std::env::var("TEST_JOBWORKERP_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let port = std::env::var("TEST_JOBWORKERP_PORT").unwrap_or_else(|_| "9000".to_string());
+        JobworkerpClientWrapper::new(&format!("http://{host}:{port}"), Some(60))
             .await
-            .expect("connect jobworkerp");
+            .expect("connect jobworkerp")
+    }
 
-        // Resolve COMMAND runner id and upsert a streaming-capable worker.
-        let runner = client
+    async fn command_runner_id(
+        client: &JobworkerpClientWrapper,
+    ) -> crate::jobworkerp::data::RunnerId {
+        use crate::client::helper::UseJobworkerpClientHelper;
+        client
             .find_runner_by_name(None, Arc::new(HashMap::new()), "COMMAND")
             .await
             .expect("find COMMAND runner")
-            .expect("COMMAND runner exists");
-        let runner_id = runner.id.expect("runner id");
-        let worker = client
+            .expect("COMMAND runner exists")
+            .id
+            .expect("runner id")
+    }
+
+    // A streaming-capable COMMAND worker without retries, so a timed-out job ends as MaxRetry.
+    async fn upsert_stream_test_worker(
+        client: &JobworkerpClientWrapper,
+        name: &str,
+    ) -> crate::jobworkerp::data::Worker {
+        use crate::client::helper::UseJobworkerpClientHelper;
+        use crate::jobworkerp::data::{QueueType, ResponseType, RetryType, WorkerData};
+        let runner_id = command_runner_id(client).await;
+        client
             .upsert_worker(
                 None,
                 Arc::new(HashMap::new()),
                 &WorkerData {
-                    name: "test-stream-first-verify".to_string(),
+                    name: name.to_string(),
                     runner_id: Some(runner_id),
                     runner_settings: vec![],
                     response_type: ResponseType::Direct as i32,
@@ -1041,22 +1218,80 @@ mod tests {
                 },
             )
             .await
-            .expect("upsert worker");
+            .expect("upsert worker")
+    }
+
+    async fn delete_test_worker(
+        client: &JobworkerpClientWrapper,
+        worker_id: Option<crate::jobworkerp::data::WorkerId>,
+    ) {
+        // Calls the raw gRPC delete instead of `delete_non_static_worker` so cleanup stays
+        // independent of the code under test in `delete_non_static_worker_removes_only_non_static`.
+        if let Some(wid) = worker_id {
+            let res = client
+                .jobworkerp_client()
+                .worker_client()
+                .await
+                .delete(to_request(&HashMap::new(), wid).expect("delete request"))
+                .await;
+            if let Err(e) = res {
+                eprintln!("failed to delete test worker {wid:?}: {e}");
+            }
+        }
+    }
+
+    async fn run_sleep_with_job_timeout(
+        client: &JobworkerpClientWrapper,
+        worker_data: &WorkerData,
+        job_timeout_sec: Option<u32>,
+    ) -> Result<(Option<JobId>, JobTerminalOutcome<serde_json::Value>)> {
+        // Errors are returned rather than panicking so the caller can always clean up the worker.
+        let (job_id, terminal) = client
+            .enqueue_stream_first_with_job_timeout(
+                worker_data.clone(),
+                serde_json::json!({"command": "sleep", "args": ["2"]}),
+                None,
+                StreamChunkMerge::Concat,
+                job_timeout_sec,
+            )
+            .await?;
+        Ok((job_id, terminal.await?))
+    }
+
+    // Requires a running jobworkerp with the COMMAND runner. Verifies that the
+    // streaming-first enqueue returns the job_id immediately (well before the long-running job
+    // terminates), which is the property the enqueue-time ExecutionRef recording relies on.
+    // Run with: cargo test -p jobworkerp-client stream_first_returns_job_id_before_terminal -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn stream_first_returns_job_id_before_terminal() {
+        use std::time::Instant;
+
+        let client = connect_test_jobworkerp().await;
+        let worker = upsert_stream_test_worker(&client, "test-stream-first-verify").await;
         let worker_data = worker.data.clone().expect("worker data");
 
         let started = Instant::now();
-        let (job_id, terminal) = client
+        let enqueued = client
             .enqueue_stream_first(
                 worker_data,
                 serde_json::json!({"command": "sleep", "args": ["5"]}),
                 None,
                 StreamChunkMerge::Concat,
             )
-            .await
-            .expect("stream-first enqueue");
-
-        // The job_id must be available well before the 5s sleep finishes.
+            .await;
         let enqueue_elapsed = started.elapsed();
+        let run: Result<_> = async {
+            let (job_id, terminal) = enqueued?;
+            Ok((job_id, terminal.await?))
+        }
+        .await;
+        let total_elapsed = started.elapsed();
+        // Clean up before asserting so a failed assertion does not leak the worker.
+        delete_test_worker(&client, worker.id).await;
+
+        let (job_id, outcome) = run.expect("stream-first run");
+        // The job_id must be available well before the 5s sleep finishes.
         assert!(
             job_id.is_some(),
             "job_id must be returned immediately from the streaming header"
@@ -1067,26 +1302,46 @@ mod tests {
         );
 
         // The terminal outcome resolves only after the job completes (~5s).
-        let outcome = terminal.await.expect("terminal outcome");
         assert_eq!(outcome.job_id, job_id, "terminal job_id matches the header");
         assert!(
-            started.elapsed().as_secs() >= 4,
+            total_elapsed.as_secs() >= 4,
             "terminal outcome should resolve after the sleep completes"
         );
         assert!(outcome.is_success(), "sleep 5 should succeed");
-
-        // Cleanup the worker.
-        if let Some(wid) = worker.id {
-            let _ = client
-                .jobworkerp_client()
-                .worker_client()
-                .await
-                .delete(to_request(&HashMap::new(), wid).unwrap())
-                .await;
-        }
     }
 
-    // Requires a running jobworkerp at localhost:9000 with the COMMAND runner. Verifies the
+    // Requires a running jobworkerp with the COMMAND runner. Verifies that an explicit job
+    // timeout overrides the connection's 60s request timeout in both directions: 1s stops a silent
+    // 2s job (streaming timeouts bound the gap between chunks) and must surface as a failure
+    // rather than Success, and 0 lets it run to completion.
+    // Run with: cargo test -p jobworkerp-client stream_first_job_timeout_is_applied -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn stream_first_job_timeout_is_applied() {
+        let client = connect_test_jobworkerp().await;
+        let worker = upsert_stream_test_worker(&client, "test-stream-first-job-timeout").await;
+        let worker_data = worker.data.clone().expect("worker data");
+
+        let timeout_run = run_sleep_with_job_timeout(&client, &worker_data, Some(1)).await;
+        let unlimited_run = run_sleep_with_job_timeout(&client, &worker_data, Some(0)).await;
+        // Clean up before asserting so a failed assertion does not leak the worker.
+        delete_test_worker(&client, worker.id).await;
+
+        let (timeout_job_id, timeout_outcome) = timeout_run.expect("timeout run");
+        assert!(timeout_job_id.is_some());
+        assert_eq!(
+            timeout_outcome.status,
+            ResultStatus::MaxRetry,
+            "a one-second timeout must stop a two-second job without retry"
+        );
+        let (_, unlimited_outcome) = unlimited_run.expect("unlimited run");
+        assert!(
+            unlimited_outcome.is_success(),
+            "zero timeout must allow completion"
+        );
+    }
+
+    // Requires a running jobworkerp with the COMMAND runner. Verifies the
     // worker cleanup shared by the streaming-first path: a use_static=false worker is deleted,
     // while a use_static=true worker is left intact.
     // Run with: cargo test -p jobworkerp-client delete_non_static_worker_removes_only_non_static -- --ignored --nocapture
@@ -1096,15 +1351,8 @@ mod tests {
         use crate::client::helper::UseJobworkerpClientHelper;
         use crate::jobworkerp::data::WorkerData;
 
-        let client = JobworkerpClientWrapper::new("http://localhost:9000", Some(60))
-            .await
-            .expect("connect jobworkerp");
-        let runner = client
-            .find_runner_by_name(None, Arc::new(HashMap::new()), "COMMAND")
-            .await
-            .expect("find COMMAND runner")
-            .expect("COMMAND runner exists");
-        let runner_id = runner.id.expect("runner id");
+        let client = connect_test_jobworkerp().await;
+        let runner_id = command_runner_id(&client).await;
 
         let upsert = |name: &str, use_static: bool| {
             let client = client.clone();
@@ -1155,13 +1403,7 @@ mod tests {
             "static worker must be left intact"
         );
 
-        // Cleanup the static worker.
-        let _ = client
-            .jobworkerp_client()
-            .worker_client()
-            .await
-            .delete(to_request(&HashMap::new(), static_id).unwrap())
-            .await;
+        delete_test_worker(&client, Some(static_id)).await;
     }
 }
 

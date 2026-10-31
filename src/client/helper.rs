@@ -53,6 +53,18 @@ impl<T> JobTerminalOutcome<T> {
     }
 }
 
+impl JobTerminalOutcome<serde_json::Value> {
+    /// A non-success outcome whose output is the failure message, the shape every failure path
+    /// reports so callers can surface the reason uniformly.
+    pub(crate) fn failure(job_id: Option<JobId>, status: ResultStatus, message: String) -> Self {
+        Self {
+            job_id,
+            status,
+            output: serde_json::Value::String(message),
+        }
+    }
+}
+
 pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     r#type: RetryType::Exponential as i32,
     interval: 800,
@@ -1843,11 +1855,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .map(|o| String::from_utf8_lossy(&o.items).into_owned())
                     .unwrap_or_default();
                 tracing::warn!("job {:?} failed: {}", job_id, error_message);
-                return Ok(JobTerminalOutcome {
-                    job_id,
-                    status,
-                    output: serde_json::Value::String(error_message),
-                });
+                return Ok(JobTerminalOutcome::failure(job_id, status, error_message));
             }
             let output_bytes = result_data
                 .output
@@ -2302,11 +2310,66 @@ pub async fn collect_stream_result(
 
 /// Collect streaming output with the explicit chunk merge semantics. See [`StreamChunkMerge`] for
 /// when to choose each variant.
+///
+/// A stream that the server terminated with an in-band error End trailer (e.g. an idle timeout)
+/// is returned as `Err`.
 pub async fn collect_stream_result_with(
     stream: &mut tonic::Streaming<ResultOutputItem>,
     result_descriptor: Option<&MessageDescriptor>,
     merge: StreamChunkMerge,
 ) -> Result<serde_json::Value> {
+    match collect_stream_output_with(stream, result_descriptor, merge).await? {
+        CollectedStream::Completed(output) => Ok(output),
+        CollectedStream::Failed(e) => Err(anyhow::anyhow!("stream terminated with error: {e}")),
+    }
+}
+
+/// Trailer metadata keys jobworkerp uses to report a failed stream in-band. A stream ending with
+/// either key must not be mistaken for a clean end-of-stream: the server neither persists a
+/// JobResult nor sends a JobResult trailer for these failures.
+pub(crate) const PLUGIN_RUN_STREAM_ERROR_KEY: &str = "jobworkerp.plugin.run_stream_error";
+const COMMON_STREAM_ERROR_KEY: &str = "stream_error";
+
+/// How a streaming job's output stream ended.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CollectedStream {
+    Completed(serde_json::Value),
+    /// The End trailer reported an in-band failure; carries the server's error message.
+    Failed(String),
+}
+
+#[derive(serde::Deserialize)]
+struct CommonStreamError {
+    code: Option<String>,
+    message: String,
+}
+
+/// Extract the failure reported in an End trailer. The common `stream_error` value is a JSON
+/// object (`code` / `message`); a malformed value is still treated as a failure, reported raw.
+pub(crate) fn stream_error_from_trailer(
+    trailer: &crate::jobworkerp::data::Trailer,
+) -> Option<String> {
+    if let Some(e) = trailer.metadata.get(PLUGIN_RUN_STREAM_ERROR_KEY) {
+        return Some(e.clone());
+    }
+    let raw = trailer.metadata.get(COMMON_STREAM_ERROR_KEY)?;
+    Some(match serde_json::from_str::<CommonStreamError>(raw) {
+        Ok(CommonStreamError {
+            code: Some(code),
+            message,
+        }) => format!("{code}: {message}"),
+        Ok(CommonStreamError { message, .. }) => message,
+        Err(_) => raw.clone(),
+    })
+}
+
+/// Like [`collect_stream_result_with`], but reports an in-band stream failure as
+/// [`CollectedStream::Failed`] instead of `Err`, so callers can map it to a job status.
+pub(crate) async fn collect_stream_output_with(
+    stream: &mut tonic::Streaming<ResultOutputItem>,
+    result_descriptor: Option<&MessageDescriptor>,
+    merge: StreamChunkMerge,
+) -> Result<CollectedStream> {
     let mut collected: Vec<u8> = Vec::new();
     // When result_descriptor is present, each Data chunk is an independent
     // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
@@ -2356,14 +2419,18 @@ pub async fn collect_stream_result_with(
                 collected = data;
                 finalized = true;
             }
-            Some(crate::jobworkerp::data::result_output_item::Item::End(_trailer)) => {
+            Some(crate::jobworkerp::data::result_output_item::Item::End(trailer)) => {
+                // Partial output of a failed stream is discarded by every caller, so skip decoding.
+                if let Some(e) = stream_error_from_trailer(&trailer) {
+                    return Ok(CollectedStream::Failed(e));
+                }
                 break;
             }
             None => {}
         }
     }
 
-    if decoded_chunks.is_empty() {
+    let output = if decoded_chunks.is_empty() {
         // When descriptor-based decoding failed (has_descriptor=false), the collected bytes
         // are concatenated raw chunks, not a valid single protobuf message.
         let desc = if has_descriptor {
@@ -2371,10 +2438,11 @@ pub async fn collect_stream_result_with(
         } else {
             None
         };
-        decode_output_to_json(&collected, desc)
+        decode_output_to_json(&collected, desc)?
     } else {
-        Ok(combine_decoded_chunks(decoded_chunks, merge))
-    }
+        combine_decoded_chunks(decoded_chunks, merge)
+    };
+    Ok(CollectedStream::Completed(output))
 }
 
 /// Reduce a sequence of descriptor-decoded streaming chunks to the single value the caller should
@@ -2506,6 +2574,20 @@ mod tests {
         assert_eq!(extract_job_id_from_metadata(&MetadataMap::new()), None);
     }
 
+    #[test]
+    fn zero_job_timeout_is_forwarded_as_zero_millis() {
+        let request = build_job_request_with_uniq_key(
+            WorkerId { value: 7 },
+            vec![],
+            0,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(request.timeout, Some(0));
+    }
+
     // A terminal failure carries job_id (and a JobResult) in the error status metadata: classified
     // as Terminal so the executed job is still recorded with its terminal status.
     #[test]
@@ -2609,6 +2691,60 @@ mod tests {
         assert_eq!(
             combine_decoded_chunks(vec![one.clone()], StreamChunkMerge::Concat),
             one
+        );
+    }
+
+    fn trailer_with(key: &str, value: &str) -> crate::jobworkerp::data::Trailer {
+        crate::jobworkerp::data::Trailer {
+            metadata: HashMap::from([(key.to_string(), value.to_string())]),
+        }
+    }
+
+    // Plugin/idle-timeout failures are signalled in-band with a plain-text End trailer value.
+    #[test]
+    fn stream_error_from_trailer_reads_plugin_run_stream_error() {
+        let trailer = trailer_with(
+            "jobworkerp.plugin.run_stream_error",
+            "stream idle timeout: no chunk emitted within 1000ms",
+        );
+        assert_eq!(
+            stream_error_from_trailer(&trailer).as_deref(),
+            Some("stream idle timeout: no chunk emitted within 1000ms")
+        );
+    }
+
+    // The common stream error contract carries a JSON object; its message is what callers need.
+    #[test]
+    fn stream_error_from_trailer_extracts_common_stream_error_message() {
+        let trailer = trailer_with(
+            "stream_error",
+            r#"{"version":1,"code":"TIMEOUT","message":"Sandbox command was idle","origin":"SANDBOX"}"#,
+        );
+        assert_eq!(
+            stream_error_from_trailer(&trailer).as_deref(),
+            Some("TIMEOUT: Sandbox command was idle")
+        );
+    }
+
+    // A malformed common error is still a failure signal: fall back to the raw value.
+    #[test]
+    fn stream_error_from_trailer_keeps_malformed_common_stream_error_raw() {
+        let trailer = trailer_with("stream_error", "not json");
+        assert_eq!(
+            stream_error_from_trailer(&trailer).as_deref(),
+            Some("not json")
+        );
+    }
+
+    #[test]
+    fn stream_error_from_trailer_is_none_for_clean_end() {
+        assert_eq!(
+            stream_error_from_trailer(&crate::jobworkerp::data::Trailer::default()),
+            None
+        );
+        assert_eq!(
+            stream_error_from_trailer(&trailer_with("other", "value")),
+            None
         );
     }
 }

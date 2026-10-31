@@ -35,7 +35,7 @@ use super::WorkerIdOrName;
 use crate::{
     client::{
         UseJobworkerpClient,
-        helper::UseJobworkerpClientHelper,
+        helper::{UseJobworkerpClientHelper, stream_error_from_trailer},
         wrapper::{
             FAILURE_WORKFLOW_STATUSES, KNOWN_TERMINAL_WORKFLOW_STATUSES,
             extract_workflow_error_message,
@@ -509,7 +509,7 @@ impl JobCommand {
                     .unwrap();
 
                 let meta = response.metadata().clone();
-                let mut response = response.into_inner();
+                let response = response.into_inner();
 
                 // Check for job result header
                 if let Some(result_bin) = meta.get(JOB_RESULT_HEADER_NAME) {
@@ -536,44 +536,24 @@ impl JobCommand {
                 JobResultCommand::print_job_result_metadata(&meta, result_desc.clone());
 
                 // print streaming response with improved formatting
-                let mut item_count = 0;
-                while let Ok(Some(item)) = response.message().await {
-                    match &item.item {
-                        Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
-                            JobResultCommand::print_streaming_output(
-                                v.as_slice(),
-                                result_desc.clone(),
-                                format,
-                                &display_options,
-                                item_count,
-                            );
-                            item_count += 1;
-                        }
-                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
-                            // Only display if no Data chunks were output yet
-                            if item_count == 0 =>
-                        {
-                            JobResultCommand::print_streaming_output(
-                                v.as_slice(),
-                                result_desc.clone(),
-                                format,
-                                &display_options,
-                                item_count,
-                            );
-                            item_count += 1;
-                        }
-                        Some(jobworkerp::data::result_output_item::Item::End(_)) => {
-                            break;
-                        }
-                        Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
-                        | None => {
-                            // Skip: FinalCollected after Data chunks already output, or empty items
-                        }
+                let mut displayed_item_count = 0;
+                let drained = drain_result_stream(response, "job", |item| {
+                    if display_stream_item(
+                        item,
+                        displayed_item_count,
+                        &result_desc,
+                        format,
+                        &display_options,
+                    ) {
+                        displayed_item_count += 1;
                     }
-                }
+                })
+                .await;
 
-                // End streaming session
-                JobResultCommand::end_streaming_session(item_count, format, &display_options);
+                // Close the streaming session even when the stream failed, then report the failure.
+                finish_stream_display(drained, displayed_item_count, |item_count| {
+                    JobResultCommand::end_streaming_session(item_count, format, &display_options);
+                })?;
             }
             Self::EnqueueWorkflow {
                 channel,
@@ -737,44 +717,19 @@ impl JobCommand {
                     let mut displayed_item_count = 0;
                     let workflow_result = async {
                         let mut terminal_output = WorkflowTerminalOutput::default();
-                        let (mut response, _item_count) =
-                            drain_workflow_stream(response, |item, item_count| {
-                                terminal_output.update(item);
-                                match &item.item {
-                            Some(jobworkerp::data::result_output_item::Item::Data(v)) => {
-                                JobResultCommand::print_streaming_output(
-                                    v.as_slice(),
-                                    result_desc.clone(),
-                                    format,
-                                    &display_options,
-                                    item_count,
-                                );
-                                displayed_item_count = item_count + 1;
-                                true
+                        let mut response = drain_result_stream(response, "workflow", |item| {
+                            terminal_output.update(item);
+                            if display_stream_item(
+                                item,
+                                displayed_item_count,
+                                &result_desc,
+                                format,
+                                &display_options,
+                            ) {
+                                displayed_item_count += 1;
                             }
-                            Some(jobworkerp::data::result_output_item::Item::FinalCollected(v))
-                                // Only display if no Data chunks were output yet
-                                if item_count == 0 =>
-                            {
-                                JobResultCommand::print_streaming_output(
-                                    v.as_slice(),
-                                    result_desc.clone(),
-                                    format,
-                                    &display_options,
-                                    item_count,
-                                );
-                                displayed_item_count = item_count + 1;
-                                true
-                            }
-                            Some(jobworkerp::data::result_output_item::Item::End(_))
-                            | Some(jobworkerp::data::result_output_item::Item::FinalCollected(_))
-                            | None => {
-                                // Skip: FinalCollected after Data chunks already output, or empty items
-                                false
-                            }
-                            }
-                            })
-                            .await?;
+                        })
+                        .await?;
 
                         let terminal_output_bytes =
                             terminal_output.terminal_output_bytes().ok_or_else(|| {
@@ -823,7 +778,7 @@ impl JobCommand {
                         Ok(())
                     }
                     .await;
-                    let workflow_result = finish_workflow_stream_display(
+                    let workflow_result = finish_stream_display(
                         workflow_result,
                         displayed_item_count,
                         |item_count| {
@@ -1283,29 +1238,55 @@ impl UseJobworkerpClient for JobCommandHelper {
 impl UseJobworkerpClientHelper for JobCommandHelper {}
 impl Tracing for JobCommandHelper {}
 
-async fn drain_workflow_stream<S, F>(mut response: S, mut on_item: F) -> Result<(S, usize)>
+/// Drain a job result stream up to its End item, calling `on_item` for every item including End.
+/// A transport error, an EOF before End, or an End trailer carrying an in-band error all fail, so
+/// a broken stream never looks like a clean completion. `kind` labels the errors (e.g. "job").
+async fn drain_result_stream<S, F>(mut response: S, kind: &str, mut on_item: F) -> Result<S>
 where
     S: futures::Stream<Item = Result<jobworkerp::data::ResultOutputItem, tonic::Status>> + Unpin,
-    F: FnMut(&jobworkerp::data::ResultOutputItem, usize) -> bool,
+    F: FnMut(&jobworkerp::data::ResultOutputItem),
 {
     use futures::StreamExt;
 
-    let mut item_count = 0;
     while let Some(item) = response.next().await {
         let item =
-            item.map_err(|error| anyhow::anyhow!("workflow stream failed before End: {error}"))?;
-        let is_end = matches!(
-            &item.item,
-            Some(jobworkerp::data::result_output_item::Item::End(_))
-        );
-        if on_item(&item, item_count) {
-            item_count += 1;
-        }
-        if is_end {
-            return Ok((response, item_count));
+            item.map_err(|error| anyhow::anyhow!("{kind} stream failed before End: {error}"))?;
+        on_item(&item);
+        if let Some(jobworkerp::data::result_output_item::Item::End(trailer)) = &item.item {
+            return match stream_error_from_trailer(trailer) {
+                Some(error) => Err(anyhow::anyhow!(
+                    "{kind} stream terminated with error: {error}"
+                )),
+                None => Ok(response),
+            };
         }
     }
-    Err(anyhow::anyhow!("workflow stream ended before End"))
+    Err(anyhow::anyhow!("{kind} stream ended before End"))
+}
+
+/// Print a streamed result item; returns whether it was displayed. `FinalCollected` carries the
+/// aggregated result, so it is shown only when no `Data` chunk has been displayed yet.
+fn display_stream_item(
+    item: &jobworkerp::data::ResultOutputItem,
+    displayed_item_count: usize,
+    result_desc: &Option<MessageDescriptor>,
+    format: &crate::display::DisplayFormat,
+    display_options: &crate::display::DisplayOptions,
+) -> bool {
+    use jobworkerp::data::result_output_item::Item;
+    let data = match &item.item {
+        Some(Item::Data(v)) => v,
+        Some(Item::FinalCollected(v)) if displayed_item_count == 0 => v,
+        Some(Item::End(_) | Item::FinalCollected(_)) | None => return false,
+    };
+    JobResultCommand::print_streaming_output(
+        data,
+        result_desc.clone(),
+        format,
+        display_options,
+        displayed_item_count,
+    );
+    true
 }
 
 #[derive(Default)]
@@ -1340,14 +1321,15 @@ fn decode_workflow_terminal_output(
 ) -> Option<serde_json::Value> {
     let message =
         ProtobufDescriptor::get_message_from_bytes(result_descriptor?.clone(), data).ok()?;
-    ProtobufDescriptor::message_to_json_value(&message).ok()
+    // Emit default-valued fields: `WorkflowStatus::Completed` is the proto3 default (0), so the
+    // default JSON mapping would drop `status` and make a completed workflow look malformed.
+    let options = prost_reflect::SerializeOptions::new().skip_default_fields(false);
+    message
+        .serialize_with_options(serde_json::value::Serializer, &options)
+        .ok()
 }
 
-fn finish_workflow_stream_display<T, F>(
-    result: Result<T>,
-    item_count: usize,
-    end_stream: F,
-) -> Result<T>
+fn finish_stream_display<T, F>(result: Result<T>, item_count: usize, end_stream: F) -> Result<T>
 where
     F: FnOnce(usize),
 {
@@ -1547,76 +1529,109 @@ mod tests {
         assert!(res.is_err(), "missing source must be rejected");
     }
 
+    fn stream_item(
+        item: jobworkerp::data::result_output_item::Item,
+    ) -> Result<jobworkerp::data::ResultOutputItem, tonic::Status> {
+        Ok(jobworkerp::data::ResultOutputItem { item: Some(item) })
+    }
+
+    fn error_end(message: &str) -> jobworkerp::data::result_output_item::Item {
+        jobworkerp::data::result_output_item::Item::End(jobworkerp::data::Trailer {
+            metadata: HashMap::from([(
+                crate::client::helper::PLUGIN_RUN_STREAM_ERROR_KEY.to_string(),
+                message.to_string(),
+            )]),
+        })
+    }
+
     #[tokio::test]
-    async fn drain_workflow_stream_stops_at_end_and_reports_data_count() {
+    async fn drain_result_stream_stops_at_clean_end() {
         use futures::{StreamExt, stream};
-        use jobworkerp::data::{ResultOutputItem, Trailer, result_output_item::Item};
+        use jobworkerp::data::{Trailer, result_output_item::Item};
 
         let response = stream::iter([
-            Ok(ResultOutputItem {
-                item: Some(Item::Data(b"first".to_vec())),
-            }),
-            Ok(ResultOutputItem {
-                item: Some(Item::End(Trailer::default())),
-            }),
-            Ok(ResultOutputItem {
-                item: Some(Item::Data(b"after-end".to_vec())),
-            }),
+            stream_item(Item::Data(b"first".to_vec())),
+            stream_item(Item::End(Trailer::default())),
+            stream_item(Item::Data(b"after-end".to_vec())),
         ]);
 
-        let (mut response, item_count) = drain_workflow_stream(response, |item, _| {
-            matches!(&item.item, Some(Item::Data(_)))
-        })
-        .await
-        .unwrap();
+        let mut seen = 0;
+        let mut response = drain_result_stream(response, "workflow", |_| seen += 1)
+            .await
+            .unwrap();
 
-        assert_eq!(item_count, 1);
+        assert_eq!(seen, 2, "items up to and including End are observed");
         assert!(
             response.next().await.is_some(),
             "items after End remain unread"
         );
     }
 
+    // Both CLI streaming commands share the drain: a stream that breaks off or reports an in-band
+    // error (e.g. idle timeout) must fail (non-zero exit) instead of looking like a clean end.
     #[tokio::test]
-    async fn drain_workflow_stream_stops_on_transport_error() {
+    async fn drain_result_stream_fails_without_clean_end() {
         use futures::stream;
-        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+        use jobworkerp::data::result_output_item::Item;
 
-        let response = stream::iter([
-            Ok(ResultOutputItem {
-                item: Some(Item::Data(b"before-error".to_vec())),
-            }),
-            Err(tonic::Status::unavailable("stream disconnected")),
-            Ok(ResultOutputItem {
-                item: Some(Item::Data(b"after-error".to_vec())),
-            }),
-        ]);
-
-        let error = drain_workflow_stream(response, |item, _| {
-            matches!(&item.item, Some(Item::Data(_)))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("stream disconnected"));
+        let data = || stream_item(Item::Data(b"partial".to_vec()));
+        for kind in ["job", "workflow"] {
+            let cases = [
+                (
+                    vec![
+                        data(),
+                        Err(tonic::Status::unavailable("stream disconnected")),
+                        data(),
+                    ],
+                    1,
+                    "stream failed before End: ",
+                ),
+                (vec![data()], 1, "stream ended before End"),
+                (
+                    vec![data(), stream_item(error_end("stream idle timeout"))],
+                    2,
+                    "stream terminated with error: stream idle timeout",
+                ),
+            ];
+            for (items, expected_seen, expected) in cases {
+                let mut seen = 0;
+                let error = drain_result_stream(stream::iter(items), kind, |_| seen += 1)
+                    .await
+                    .unwrap_err();
+                assert_eq!(seen, expected_seen, "{kind}: {expected}");
+                assert!(
+                    error.to_string().contains(&format!("{kind} {expected}")),
+                    "expected {kind} {expected:?}, got {error}"
+                );
+            }
+        }
     }
 
-    #[tokio::test]
-    async fn drain_workflow_stream_rejects_eof_before_end() {
-        use futures::stream;
-        use jobworkerp::data::{ResultOutputItem, result_output_item::Item};
+    #[test]
+    fn display_stream_item_shows_final_collected_only_before_data() {
+        use jobworkerp::data::{ResultOutputItem, Trailer, result_output_item::Item};
 
-        let response = stream::iter([Ok(ResultOutputItem {
-            item: Some(Item::Data(b"before-eof".to_vec())),
-        })]);
+        let options = crate::display::DisplayOptions {
+            format: crate::display::DisplayFormat::Json,
+            color_enabled: false,
+            max_field_length: None,
+            use_unicode: false,
+            no_truncate: true,
+        };
+        let shown = |item: Item, displayed: usize| {
+            display_stream_item(
+                &ResultOutputItem { item: Some(item) },
+                displayed,
+                &None,
+                &crate::display::DisplayFormat::Json,
+                &options,
+            )
+        };
 
-        let error = drain_workflow_stream(response, |item, _| {
-            matches!(&item.item, Some(Item::Data(_)))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("ended before End"));
+        assert!(shown(Item::Data(b"{}".to_vec()), 0));
+        assert!(shown(Item::FinalCollected(b"{}".to_vec()), 0));
+        assert!(!shown(Item::FinalCollected(b"{}".to_vec()), 1));
+        assert!(!shown(Item::End(Trailer::default()), 1));
     }
 
     #[test]
@@ -1707,7 +1722,7 @@ mod tests {
 
         let ended_with_count = Arc::new(AtomicUsize::new(usize::MAX));
         let end_count = Arc::clone(&ended_with_count);
-        let error = finish_workflow_stream_display(
+        let error = finish_stream_display(
             Err::<(), _>(anyhow::anyhow!("stream disconnected")),
             2,
             move |item_count| end_count.store(item_count, Ordering::SeqCst),
@@ -1748,6 +1763,80 @@ mod tests {
             error
                 .to_string()
                 .contains("workflow failed (Faulted): clone failed")
+        );
+    }
+
+    // Minimal proto3 mirror of `WorkflowResult`: `Completed` is the enum default (0), so the
+    // wire bytes of a completed workflow carry no `status` at all.
+    fn workflow_result_descriptor() -> MessageDescriptor {
+        let proto = r#"
+        syntax = "proto3";
+        message WorkflowResult {
+          enum WorkflowStatus {
+            Completed = 0;
+            Faulted = 1;
+            Cancelled = 2;
+            Running = 4;
+          }
+          string id = 1;
+          string output = 2;
+          WorkflowStatus status = 4;
+          optional string error_message = 5;
+        }
+        "#;
+        ProtobufDescriptor::new(&proto.to_string())
+            .unwrap()
+            .get_message_by_name("WorkflowResult")
+            .unwrap()
+    }
+
+    fn encode_workflow_result(
+        descriptor: &MessageDescriptor,
+        fields: &[(&str, prost_reflect::Value)],
+    ) -> Vec<u8> {
+        let mut message = prost_reflect::DynamicMessage::new(descriptor.clone());
+        for (name, value) in fields {
+            message.set_field_by_name(name, value.clone());
+        }
+        message.encode_to_vec()
+    }
+
+    #[test]
+    fn decode_workflow_terminal_output_keeps_default_completed_status() {
+        let descriptor = workflow_result_descriptor();
+        let bytes = encode_workflow_result(
+            &descriptor,
+            &[("id", prost_reflect::Value::String("wf-1".to_string()))],
+        );
+
+        let output = decode_workflow_terminal_output(&bytes, Some(&descriptor)).unwrap();
+
+        assert_eq!(output["status"], json!("Completed"));
+        validate_workflow_terminal_output(&output).unwrap();
+    }
+
+    #[test]
+    fn decode_workflow_terminal_output_reports_faulted_status() {
+        let descriptor = workflow_result_descriptor();
+        let bytes = encode_workflow_result(
+            &descriptor,
+            &[
+                ("status", prost_reflect::Value::EnumNumber(1)),
+                (
+                    "error_message",
+                    prost_reflect::Value::String("step failed".to_string()),
+                ),
+            ],
+        );
+
+        let output = decode_workflow_terminal_output(&bytes, Some(&descriptor)).unwrap();
+        let error = validate_workflow_terminal_output(&output).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("workflow failed (Faulted): step failed"),
+            "unexpected error: {error}"
         );
     }
 
