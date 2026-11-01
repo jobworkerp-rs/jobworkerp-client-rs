@@ -23,3 +23,4 @@ pub mod error;
 pub mod grpc;
 pub mod plugins;
 pub mod proto;
+pub mod stream_error;

@@ -35,7 +35,7 @@ use super::WorkerIdOrName;
 use crate::{
     client::{
         UseJobworkerpClient,
-        helper::{UseJobworkerpClientHelper, stream_error_from_trailer},
+        helper::UseJobworkerpClientHelper,
         wrapper::{
             FAILURE_WORKFLOW_STATUSES, KNOWN_TERMINAL_WORKFLOW_STATUSES,
             extract_workflow_error_message,
@@ -1241,9 +1241,10 @@ where
             item.map_err(|error| anyhow::anyhow!("{kind} stream failed before End: {error}"))?;
         on_item(&item);
         if let Some(jobworkerp::data::result_output_item::Item::End(trailer)) = &item.item {
-            return match stream_error_from_trailer(trailer) {
+            return match crate::stream_error::stream_error_from_trailer(trailer) {
                 Some(error) => Err(anyhow::anyhow!(
-                    "{kind} stream terminated with error: {error}"
+                    "{kind} {}",
+                    crate::stream_error::stream_failure_error(&error)
                 )),
                 None => Ok(response),
             };
@@ -1525,10 +1526,23 @@ mod tests {
 
     fn error_end(message: &str) -> jobworkerp::data::result_output_item::Item {
         jobworkerp::data::result_output_item::Item::End(jobworkerp::data::Trailer {
+            error: Some(jobworkerp::data::StreamError {
+                code: jobworkerp::data::StreamErrorCode::Timeout as i32,
+                message: message.to_string(),
+                origin: "WORKER".to_string(),
+            }),
+            ..Default::default()
+        })
+    }
+
+    // Older servers report failures only through the plain-text plugin key.
+    fn legacy_error_end(message: &str) -> jobworkerp::data::result_output_item::Item {
+        jobworkerp::data::result_output_item::Item::End(jobworkerp::data::Trailer {
             metadata: HashMap::from([(
-                crate::client::helper::PLUGIN_RUN_STREAM_ERROR_KEY.to_string(),
+                crate::stream_error::PLUGIN_RUN_STREAM_ERROR_KEY.to_string(),
                 message.to_string(),
             )]),
+            ..Default::default()
         })
     }
 
@@ -1578,7 +1592,12 @@ mod tests {
                 (
                     vec![data(), stream_item(error_end("stream idle timeout"))],
                     2,
-                    "stream terminated with error: stream idle timeout",
+                    "stream terminated with error: WORKER TIMEOUT: stream idle timeout",
+                ),
+                (
+                    vec![data(), stream_item(legacy_error_end("plugin failed"))],
+                    2,
+                    "stream terminated with error: PLUGIN EXECUTION_FAILED: plugin failed",
                 ),
             ];
             for (items, expected_seen, expected) in cases {

@@ -161,7 +161,8 @@ pub trait MultiMethodPluginRunner: Send + Sync {
     /// Collect streaming output into a single result
     ///
     /// Default implementation: keeps only the last data chunk
-    /// (protobuf binary concatenation produces invalid data)
+    /// (protobuf binary concatenation produces invalid data), and fails when the End trailer
+    /// reports a stream failure
     /// Plugins should override this for custom collection logic (e.g., merging proto messages)
     fn collect_stream(
         &self,
@@ -187,6 +188,12 @@ pub trait MultiMethodPluginRunner: Send + Sync {
                         final_collected = Some(data);
                     }
                     Some(result_output_item::Item::End(trailer)) => {
+                        // A failed End must not be collected as a (partial) success.
+                        if let Some(error) =
+                            crate::stream_error::stream_error_from_trailer(&trailer)
+                        {
+                            return Err(crate::stream_error::stream_failure_error(&error));
+                        }
                         metadata = trailer.metadata;
                         break;
                     }
@@ -226,4 +233,112 @@ macro_rules! schema_to_json_string_option {
             }
         }
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobworkerp::data::{
+        ResultOutputItem, StreamError, StreamErrorCode, Trailer, result_output_item,
+    };
+    use crate::stream_error::{COMMON_STREAM_ERROR_KEY, PLUGIN_RUN_STREAM_ERROR_KEY};
+    use futures::StreamExt;
+
+    struct DefaultCollect;
+
+    impl MultiMethodPluginRunner for DefaultCollect {
+        fn name(&self) -> String {
+            "DefaultCollect".to_string()
+        }
+        fn description(&self) -> String {
+            String::new()
+        }
+        fn load(&mut self, _settings: Vec<u8>) -> Result<()> {
+            Ok(())
+        }
+        fn run(
+            &mut self,
+            _args: Vec<u8>,
+            metadata: HashMap<String, String>,
+            _using: Option<&str>,
+        ) -> (Result<Vec<u8>>, HashMap<String, String>) {
+            (Ok(Vec::new()), metadata)
+        }
+        fn cancel(&mut self) -> bool {
+            false
+        }
+        fn is_canceled(&self) -> bool {
+            false
+        }
+        fn runner_settings_proto(&self) -> String {
+            String::new()
+        }
+        fn method_proto_map(&self) -> HashMap<String, crate::jobworkerp::data::MethodSchema> {
+            HashMap::new()
+        }
+    }
+
+    async fn collect(end: Trailer) -> Result<(Vec<u8>, HashMap<String, String>)> {
+        let items = [
+            ResultOutputItem {
+                item: Some(result_output_item::Item::Data(b"first".to_vec())),
+            },
+            ResultOutputItem {
+                item: Some(result_output_item::Item::Data(b"last".to_vec())),
+            },
+            ResultOutputItem {
+                item: Some(result_output_item::Item::End(end)),
+            },
+        ];
+        DefaultCollect
+            .collect_stream(futures::stream::iter(items).boxed(), None)
+            .await
+    }
+
+    #[tokio::test]
+    async fn default_collect_stream_keeps_the_last_chunk_on_a_clean_end() {
+        let (output, metadata) = collect(Trailer {
+            metadata: HashMap::from([("k".to_string(), "v".to_string())]),
+            ..Default::default()
+        })
+        .await
+        .expect("clean end");
+        assert_eq!(output, b"last");
+        assert_eq!(
+            metadata,
+            HashMap::from([("k".to_string(), "v".to_string())])
+        );
+    }
+
+    #[tokio::test]
+    async fn default_collect_stream_rejects_a_typed_failed_end() {
+        let error = collect(Trailer {
+            error: Some(StreamError {
+                code: StreamErrorCode::ExecutionFailed as i32,
+                message: "boom".to_string(),
+                origin: "PLUGIN_X".to_string(),
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect_err("failed end");
+        assert!(
+            error
+                .to_string()
+                .contains("PLUGIN_X EXECUTION_FAILED: boom"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_collect_stream_rejects_legacy_failure_keys() {
+        for key in [PLUGIN_RUN_STREAM_ERROR_KEY, COMMON_STREAM_ERROR_KEY] {
+            let result = collect(Trailer {
+                metadata: HashMap::from([(key.to_string(), "failed".to_string())]),
+                ..Default::default()
+            })
+            .await;
+            assert!(result.is_err(), "{key} must fail the collect");
+        }
+    }
 }

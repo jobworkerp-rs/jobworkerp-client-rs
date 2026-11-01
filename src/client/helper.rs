@@ -12,8 +12,8 @@ use crate::command::to_request;
 use crate::error::{ClientError, UniqueEnqueueError};
 use crate::jobworkerp::data::{
     JobId, JobResult, JobResultData, Priority, QueueType, ResponseType, ResultOutputItem,
-    ResultStatus, RetryPolicy, RetryType, Runner, RunnerData, RunnerId, Worker, WorkerData,
-    WorkerId,
+    ResultStatus, RetryPolicy, RetryType, Runner, RunnerData, RunnerId, StreamError, Worker,
+    WorkerData, WorkerId,
 };
 use crate::jobworkerp::function::data::{
     FunctionSet, FunctionSetData, FunctionSetId, FunctionSpecs,
@@ -23,6 +23,10 @@ use crate::jobworkerp::service::{
     CreateJobResponse, FindJobResultListRequest, JobRequest, RunnerNameRequest, WorkerNameRequest,
 };
 use crate::proto::JobworkerpProto;
+use crate::stream_error::{
+    describe_stream_error, result_status_for_stream_error, stream_error_from_trailer,
+    stream_failure_error,
+};
 use anyhow::{Context, Result};
 use command_utils::cache_ok;
 use command_utils::protobuf::ProtobufDescriptor;
@@ -62,6 +66,16 @@ impl JobTerminalOutcome<serde_json::Value> {
             status,
             output: serde_json::Value::String(message),
         }
+    }
+
+    /// The outcome of a stream that ended with an in-band failure. The server neither persists a
+    /// JobResult nor sends a JobResult trailer for these, so the status comes from the error code.
+    pub(crate) fn stream_failure(job_id: Option<JobId>, error: &StreamError) -> Self {
+        Self::failure(
+            job_id,
+            result_status_for_stream_error(error),
+            describe_stream_error(error),
+        )
     }
 }
 
@@ -2320,47 +2334,16 @@ pub async fn collect_stream_result_with(
 ) -> Result<serde_json::Value> {
     match collect_stream_output_with(stream, result_descriptor, merge).await? {
         CollectedStream::Completed(output) => Ok(output),
-        CollectedStream::Failed(e) => Err(anyhow::anyhow!("stream terminated with error: {e}")),
+        CollectedStream::Failed(e) => Err(stream_failure_error(&e)),
     }
 }
-
-/// Trailer metadata keys jobworkerp uses to report a failed stream in-band. A stream ending with
-/// either key must not be mistaken for a clean end-of-stream: the server neither persists a
-/// JobResult nor sends a JobResult trailer for these failures.
-pub(crate) const PLUGIN_RUN_STREAM_ERROR_KEY: &str = "jobworkerp.plugin.run_stream_error";
-const COMMON_STREAM_ERROR_KEY: &str = "stream_error";
 
 /// How a streaming job's output stream ended.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CollectedStream {
     Completed(serde_json::Value),
-    /// The End trailer reported an in-band failure; carries the server's error message.
-    Failed(String),
-}
-
-#[derive(serde::Deserialize)]
-struct CommonStreamError {
-    code: Option<String>,
-    message: String,
-}
-
-/// Extract the failure reported in an End trailer. The common `stream_error` value is a JSON
-/// object (`code` / `message`); a malformed value is still treated as a failure, reported raw.
-pub(crate) fn stream_error_from_trailer(
-    trailer: &crate::jobworkerp::data::Trailer,
-) -> Option<String> {
-    if let Some(e) = trailer.metadata.get(PLUGIN_RUN_STREAM_ERROR_KEY) {
-        return Some(e.clone());
-    }
-    let raw = trailer.metadata.get(COMMON_STREAM_ERROR_KEY)?;
-    Some(match serde_json::from_str::<CommonStreamError>(raw) {
-        Ok(CommonStreamError {
-            code: Some(code),
-            message,
-        }) => format!("{code}: {message}"),
-        Ok(CommonStreamError { message, .. }) => message,
-        Err(_) => raw.clone(),
-    })
+    /// The End trailer reported an in-band failure.
+    Failed(StreamError),
 }
 
 /// Like [`collect_stream_result_with`], but reports an in-band stream failure as
@@ -2694,57 +2677,20 @@ mod tests {
         );
     }
 
-    fn trailer_with(key: &str, value: &str) -> crate::jobworkerp::data::Trailer {
-        crate::jobworkerp::data::Trailer {
-            metadata: HashMap::from([(key.to_string(), value.to_string())]),
-        }
-    }
-
-    // Plugin/idle-timeout failures are signalled in-band with a plain-text End trailer value.
     #[test]
-    fn stream_error_from_trailer_reads_plugin_run_stream_error() {
-        let trailer = trailer_with(
-            "jobworkerp.plugin.run_stream_error",
-            "stream idle timeout: no chunk emitted within 1000ms",
-        );
+    fn stream_failure_outcome_carries_the_mapped_status() {
+        let job_id = Some(JobId { value: 7 });
+        let error = StreamError {
+            code: crate::jobworkerp::data::StreamErrorCode::Cancelled as i32,
+            message: "boom".to_string(),
+            origin: "COMMAND".to_string(),
+        };
+        let outcome = JobTerminalOutcome::stream_failure(job_id, &error);
+        assert_eq!(outcome.job_id, job_id);
+        assert_eq!(outcome.status, ResultStatus::Cancelled);
         assert_eq!(
-            stream_error_from_trailer(&trailer).as_deref(),
-            Some("stream idle timeout: no chunk emitted within 1000ms")
-        );
-    }
-
-    // The common stream error contract carries a JSON object; its message is what callers need.
-    #[test]
-    fn stream_error_from_trailer_extracts_common_stream_error_message() {
-        let trailer = trailer_with(
-            "stream_error",
-            r#"{"version":1,"code":"TIMEOUT","message":"Sandbox command was idle","origin":"SANDBOX"}"#,
-        );
-        assert_eq!(
-            stream_error_from_trailer(&trailer).as_deref(),
-            Some("TIMEOUT: Sandbox command was idle")
-        );
-    }
-
-    // A malformed common error is still a failure signal: fall back to the raw value.
-    #[test]
-    fn stream_error_from_trailer_keeps_malformed_common_stream_error_raw() {
-        let trailer = trailer_with("stream_error", "not json");
-        assert_eq!(
-            stream_error_from_trailer(&trailer).as_deref(),
-            Some("not json")
-        );
-    }
-
-    #[test]
-    fn stream_error_from_trailer_is_none_for_clean_end() {
-        assert_eq!(
-            stream_error_from_trailer(&crate::jobworkerp::data::Trailer::default()),
-            None
-        );
-        assert_eq!(
-            stream_error_from_trailer(&trailer_with("other", "value")),
-            None
+            outcome.output,
+            serde_json::Value::String(describe_stream_error(&error))
         );
     }
 }

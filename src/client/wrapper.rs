@@ -496,8 +496,8 @@ impl JobworkerpClientWrapper {
     /// `enqueue_with_json_and_job_id`; in that case the returned immediate `job_id` is `None`
     /// (it is only known once the terminal future resolves).
     ///
-    /// A stream the server ends with an in-band error (e.g. a timeout) resolves to
-    /// `ResultStatus::MaxRetry` with the server's error message as output.
+    /// A stream the server ends with an in-band error resolves to the status chosen by
+    /// [`crate::stream_error::result_status_for_stream_error`], with the described error as output.
     pub async fn enqueue_stream_first(
         &self,
         worker_data: WorkerData,
@@ -622,13 +622,9 @@ impl JobworkerpClientWrapper {
                             CollectedStream::Completed(output) => output,
                             // An in-band stream failure (e.g. idle timeout) is never persisted nor
                             // reported in a JobResult trailer, so the fallbacks below would wrongly
-                            // resolve it to Success. Report it like a non-retried failed job.
+                            // resolve it to Success. Its status comes from the error code instead.
                             CollectedStream::Failed(error) => {
-                                return Ok(JobTerminalOutcome::failure(
-                                    job_id,
-                                    ResultStatus::MaxRetry,
-                                    error,
-                                ));
+                                return Ok(JobTerminalOutcome::stream_failure(job_id, &error));
                             }
                         };
                         // Terminal status: trailer JobResult > initial header JobResult >
