@@ -114,6 +114,24 @@ pub enum JobResultCommand {
     Count {},
 }
 
+/// Only a successful output is decoded with the result descriptor; a failed output is a UTF-8
+/// diagnostic, so its lookup RPC would be wasted.
+fn needs_result_descriptor(data: &jobworkerp::data::JobResultData) -> bool {
+    data.status() == jobworkerp::data::ResultStatus::Success && data.output.is_some()
+}
+
+/// Result descriptor for decoding `job_result`'s output, or `None` when it is not decoded.
+async fn result_descriptor_for(
+    client: &crate::client::JobworkerpClient,
+    job_result: &JobResult,
+) -> Option<MessageDescriptor> {
+    let data = job_result
+        .data
+        .as_ref()
+        .filter(|d| needs_result_descriptor(d))?;
+    JobworkerpProto::resolve_result_descriptor(client, &data.worker_name, None).await
+}
+
 impl JobResultCommand {
     const RESULT_HEADER_NAME: &str = "x-job-result-bin";
     pub async fn execute(
@@ -292,9 +310,7 @@ impl JobResultCommand {
                 // Collect all job results into a vector for batch processing
                 let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    let worker_name = job_res.data.as_ref().map_or("", |d| d.worker_name.as_str());
-                    let result_proto =
-                        JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
+                    let result_proto = result_descriptor_for(client, &job_res).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
                     job_results_json.push(job_result_json);
                 }
@@ -346,9 +362,7 @@ impl JobResultCommand {
                 // Collect all job results into a vector for batch processing
                 let mut job_results_json = Vec::new();
                 while let Some(job_res) = response.message().await.unwrap() {
-                    let worker_name = job_res.data.as_ref().map_or("", |d| d.worker_name.as_str());
-                    let result_proto =
-                        JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
+                    let result_proto = result_descriptor_for(client, &job_res).await;
                     let job_result_json = job_result_to_json(&job_res, result_proto, format);
                     job_results_json.push(job_result_json);
                 }
@@ -419,12 +433,7 @@ impl JobResultCommand {
             utils::supports_color,
         };
 
-        let worker_name = job_result
-            .data
-            .as_ref()
-            .map_or("", |d| d.worker_name.as_str());
-        let result_proto =
-            JobworkerpProto::resolve_result_descriptor(client, worker_name, None).await;
+        let result_proto = result_descriptor_for(client, &job_result).await;
 
         // Convert to JSON with proper formatting
         let job_result_json = job_result_to_json(&job_result, result_proto, format);
@@ -615,3 +624,33 @@ impl JobResultCommand {
     }
 }
 // transform command to protobuf message of job_result service
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobworkerp::data::{JobResultData, ResultOutput, ResultStatus};
+
+    fn data(status: ResultStatus, output: Option<&[u8]>) -> JobResultData {
+        JobResultData {
+            status: status as i32,
+            output: output.map(|items| ResultOutput {
+                items: items.to_vec(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    // Only a successful output is decoded, so other results skip the descriptor lookup RPC.
+    #[test]
+    fn result_descriptor_is_needed_only_for_a_success_output() {
+        assert!(needs_result_descriptor(&data(
+            ResultStatus::Success,
+            Some(b"x")
+        )));
+        assert!(!needs_result_descriptor(&data(ResultStatus::Success, None)));
+        assert!(!needs_result_descriptor(&data(
+            ResultStatus::MaxRetry,
+            Some(b"x")
+        )));
+    }
+}

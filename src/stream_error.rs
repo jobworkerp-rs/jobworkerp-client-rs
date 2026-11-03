@@ -153,14 +153,23 @@ pub(crate) fn describe_classification(error: &StreamError) -> String {
     )
 }
 
+/// The output of a failed result, which is a UTF-8 diagnostic rather than the runner's result
+/// message, so it must not be decoded with the result descriptor. `None` for a success or a
+/// failure without output.
+pub(crate) fn failure_diagnostic(data: &JobResultData) -> Option<String> {
+    if data.status() == ResultStatus::Success {
+        return None;
+    }
+    data.output
+        .as_ref()
+        .map(|output| String::from_utf8_lossy(&output.items).into_owned())
+}
+
 /// Diagnostic of a failed (non-streaming) job result: the output text, followed by the failure
 /// classification when the worker reported one. Results without it (older workers, results read
 /// back from the RDB) keep the bare diagnostic.
 pub(crate) fn describe_job_failure(data: &JobResultData) -> String {
-    let mut diagnostic = data
-        .output
-        .as_ref()
-        .map(|output| String::from_utf8_lossy(&output.items).into_owned())
+    let mut diagnostic = failure_diagnostic(data)
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| format!("no output (status: {})", data.status().as_str_name()));
     if let Some(error) = &data.error {
@@ -491,5 +500,35 @@ mod tests {
             describe_job_failure(&failed_result(Some(""), None)),
             "no output (status: MAX_RETRY)"
         );
+    }
+
+    #[test]
+    fn failure_diagnostic_is_the_output_text_of_a_failure() {
+        assert_eq!(
+            failure_diagnostic(&failed_result(Some("exit 1"), None)).as_deref(),
+            Some("exit 1")
+        );
+        let invalid_utf8 = JobResultData {
+            status: ResultStatus::MaxRetry as i32,
+            output: Some(ResultOutput {
+                items: vec![b'a', 0xff],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            failure_diagnostic(&invalid_utf8).as_deref(),
+            Some("a\u{fffd}")
+        );
+    }
+
+    // A success carries the runner's result message, and a failure without output has no text.
+    #[test]
+    fn failure_diagnostic_is_none_for_success_or_missing_output() {
+        let success = JobResultData {
+            status: ResultStatus::Success as i32,
+            ..failed_result(Some("\x08\x01"), None)
+        };
+        assert_eq!(failure_diagnostic(&success), None);
+        assert_eq!(failure_diagnostic(&failed_result(None, None)), None);
     }
 }

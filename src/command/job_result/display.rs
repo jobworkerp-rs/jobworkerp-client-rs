@@ -12,7 +12,7 @@
 
 use crate::display::{DisplayFormat, format::EnumFormatter};
 use crate::jobworkerp::data::{JobResult, ResultStatus, StreamError};
-use crate::stream_error::{code_name, problem_fields};
+use crate::stream_error::{code_name, failure_diagnostic, problem_fields};
 use chrono::DateTime;
 use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
@@ -109,7 +109,9 @@ pub fn job_result_to_json(
             serde_json::json!(format_duration(data.start_time, data.end_time, format));
 
         // Process output data
-        if let Some(output) = &data.output {
+        if let Some(diagnostic) = failure_diagnostic(data) {
+            result_json["output"] = serde_json::json!(diagnostic);
+        } else if let Some(output) = &data.output {
             if let Some(descriptor) = result_descriptor {
                 // Try to parse as protobuf message
                 match ProtobufDescriptor::get_message_from_bytes(descriptor, &output.items) {
@@ -195,18 +197,9 @@ mod tests {
     use crate::jobworkerp::data::{JobResultData, ProblemDetails, ResultOutput, StreamErrorCode};
 
     fn job_result(error: Option<StreamError>) -> JobResult {
-        JobResult {
-            id: None,
-            data: Some(JobResultData {
-                status: ResultStatus::MaxRetry as i32,
-                output: Some(ResultOutput {
-                    items: b"failed".to_vec(),
-                }),
-                error,
-                ..Default::default()
-            }),
-            metadata: std::collections::HashMap::new(),
-        }
+        let mut result = result_with(ResultStatus::MaxRetry, b"failed");
+        result.data.as_mut().unwrap().error = error;
+        result
     }
 
     // Successes and results read back from the RDB have no classification: keep the output shape.
@@ -273,5 +266,58 @@ mod tests {
             ..Default::default()
         };
         assert!(stream_error_to_json(&error).get("problem").is_none());
+    }
+
+    fn string_result_descriptor() -> MessageDescriptor {
+        ProtobufDescriptor::new(
+            &r#"
+            syntax = "proto3";
+            message R {
+              string s = 1;
+            }
+            "#
+            .to_string(),
+        )
+        .unwrap()
+        .get_message_by_name("R")
+        .unwrap()
+    }
+
+    fn result_with(status: ResultStatus, items: &[u8]) -> JobResult {
+        JobResult {
+            id: None,
+            data: Some(JobResultData {
+                status: status as i32,
+                output: Some(ResultOutput {
+                    items: items.to_vec(),
+                }),
+                ..Default::default()
+            }),
+            metadata: std::collections::HashMap::new(),
+        }
+    }
+
+    // These bytes also decode as `R { s: "ok" }`, so decoding a failure's diagnostic with the
+    // result descriptor would show a fabricated result instead of the text.
+    const AMBIGUOUS_OUTPUT: &[u8] = b"\n\x02ok";
+
+    #[test]
+    fn job_result_json_shows_a_failure_output_as_text_even_with_a_descriptor() {
+        let json = job_result_to_json(
+            &result_with(ResultStatus::MaxRetry, AMBIGUOUS_OUTPUT),
+            Some(string_result_descriptor()),
+            &DisplayFormat::Json,
+        );
+        assert_eq!(json["output"], serde_json::json!("\n\x02ok"));
+    }
+
+    #[test]
+    fn job_result_json_decodes_a_success_output_with_the_descriptor() {
+        let json = job_result_to_json(
+            &result_with(ResultStatus::Success, AMBIGUOUS_OUTPUT),
+            Some(string_result_descriptor()),
+            &DisplayFormat::Json,
+        );
+        assert_eq!(json["output"], serde_json::json!({"s": "ok"}));
     }
 }

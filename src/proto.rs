@@ -7,6 +7,7 @@
 
 use crate::jobworkerp::data::{JobResultData, MethodProtoMap, Runner, Worker};
 use crate::jobworkerp::service::WorkerNameRequest;
+use crate::stream_error::failure_diagnostic;
 use crate::{
     client::JobworkerpClient,
     jobworkerp::{
@@ -277,12 +278,17 @@ impl JobworkerpProto {
             None
         }
     }
+    /// Decode a result's output to JSON with the runner's result schema. A failed result's output
+    /// is a UTF-8 diagnostic, so it is returned as a JSON string without decoding.
     pub async fn resolve_result_output_to_json(
         client: &crate::client::JobworkerpClient,
         worker_name: &str,
         result_data: &JobResultData,
         using: Option<&str>,
     ) -> Result<serde_json::Value> {
+        if let Some(diagnostic) = failure_diagnostic(result_data) {
+            return Ok(serde_json::Value::String(diagnostic));
+        }
         let output_text: serde_json::Value = match result_data.output.as_ref() {
             Some(output) if !output.items.is_empty() => {
                 let result_proto =
@@ -332,12 +338,17 @@ impl JobworkerpProto {
         };
         Ok(output_text)
     }
+    /// Text form of a result's output. A failed result's output is returned as its UTF-8
+    /// diagnostic without decoding.
     pub async fn resolve_result_output_to_string(
         client: &crate::client::JobworkerpClient,
         worker_name: &str,
         result_data: &JobResultData,
         using: Option<&str>,
     ) -> Result<String> {
+        if let Some(diagnostic) = failure_diagnostic(result_data) {
+            return Ok(diagnostic);
+        }
         let output_text: String = match result_data.output.as_ref() {
             Some(output) if !output.items.is_empty() => {
                 let result_proto =
