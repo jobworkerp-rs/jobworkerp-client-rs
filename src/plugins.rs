@@ -317,6 +317,7 @@ mod tests {
                 code: StreamErrorCode::ExecutionFailed as i32,
                 message: "boom".to_string(),
                 origin: "PLUGIN_X".to_string(),
+                ..Default::default()
             }),
             ..Default::default()
         })

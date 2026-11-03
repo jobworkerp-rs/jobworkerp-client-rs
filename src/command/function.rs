@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     client::JobworkerpClient,
     command::to_request,
+    error::ClientError,
     jobworkerp::data::{QueueType, ResponseType, RetryPolicy, RunnerId, WorkerId},
     jobworkerp::function::{
         data::{FunctionCallOptions, FunctionId, FunctionResult, FunctionSpecs, WorkerOptions},
@@ -15,6 +16,14 @@ use crate::{
 use clap::Parser;
 
 pub mod display;
+
+/// User-facing message for a failed `FunctionService.Call`, classified like other client errors.
+fn call_error_message(status: tonic::Status) -> String {
+    format!(
+        "function call failed: {}",
+        ClientError::from_tonic_status(status)
+    )
+}
 
 #[derive(Parser, Debug)]
 pub struct FunctionArg {
@@ -112,6 +121,33 @@ pub enum FunctionCommand {
     clippy::similar_names
 )]
 impl FunctionCommand {
+    /// Run `FunctionService.Call` and print every result; stops at the first gRPC error.
+    async fn call_and_print(
+        client: &JobworkerpClient,
+        metadata: &HashMap<String, String>,
+        request: FunctionCallRequest,
+    ) -> Result<(), tonic::Status> {
+        let response = client
+            .function_client()
+            .await
+            .call(to_request(metadata, request).unwrap())
+            .await?;
+
+        println!("meta: {:#?}", response.metadata());
+        let mut result_stream = response.into_inner();
+
+        // Process streaming results with improved formatting
+        while let Some(function_result) = result_stream.message().await? {
+            Self::print_function_result(&function_result);
+        }
+
+        println!(
+            "trailer: {:#?}",
+            result_stream.trailers().await?.unwrap_or_default()
+        );
+        Ok(())
+    }
+
     pub async fn execute(&self, client: &JobworkerpClient, metadata: &HashMap<String, String>) {
         match self {
             Self::List {
@@ -315,26 +351,9 @@ impl FunctionCommand {
                     options: call_options,
                 };
 
-                // Make the call
-                let response = client
-                    .function_client()
-                    .await
-                    .call(to_request(metadata, request).unwrap())
-                    .await
-                    .unwrap();
-
-                println!("meta: {:#?}", response.metadata());
-                let mut result_stream = response.into_inner();
-
-                // Process streaming results with improved formatting
-                while let Some(function_result) = result_stream.message().await.unwrap() {
-                    Self::print_function_result(&function_result);
+                if let Err(status) = Self::call_and_print(client, metadata, request).await {
+                    eprintln!("{}", call_error_message(status));
                 }
-
-                println!(
-                    "trailer: {:#?}",
-                    result_stream.trailers().await.unwrap().unwrap_or_default()
-                );
             }
             Self::Find {
                 runner_id,
@@ -634,5 +653,24 @@ impl FunctionCommand {
                 println!("\t\t[metadata] {:#?}", last_info.metadata);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The server rejects bad arguments and unknown methods with these codes;
+    // they must surface as readable errors instead of a panic.
+    #[test]
+    fn call_error_message_names_the_rejection() {
+        assert_eq!(
+            call_error_message(tonic::Status::invalid_argument("args do not match schema")),
+            "function call failed: InvalidParameter(args do not match schema)"
+        );
+        assert_eq!(
+            call_error_message(tonic::Status::not_found("no method 'x'")),
+            "function call failed: NotFound(no method 'x')"
+        );
     }
 }

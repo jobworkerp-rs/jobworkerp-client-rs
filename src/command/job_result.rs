@@ -494,6 +494,12 @@ impl JobResultCommand {
                                             data.job_id.map(|j| j.value).unwrap_or_default()
                                         );
                                         println!("\t[status]: {}", data.status().as_str_name());
+                                        if let Some(error) = &data.error {
+                                            println!(
+                                                "\t[error]: {}",
+                                                crate::stream_error::describe_classification(error)
+                                            );
+                                        }
                                     }
                                 }
                                 Err(e) => {

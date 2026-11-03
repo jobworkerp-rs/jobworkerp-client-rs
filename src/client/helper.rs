@@ -24,8 +24,8 @@ use crate::jobworkerp::service::{
 };
 use crate::proto::JobworkerpProto;
 use crate::stream_error::{
-    describe_stream_error, result_status_for_stream_error, stream_error_from_trailer,
-    stream_failure_error,
+    describe_job_failure, describe_stream_error, result_status_for_stream_error,
+    stream_error_from_trailer, stream_failure_error,
 };
 use anyhow::{Context, Result};
 use command_utils::cache_ok;
@@ -42,13 +42,17 @@ use tokio_stream::StreamExt;
 ///
 /// Unlike the plain output helpers, this preserves the assigned `job_id` and the terminal
 /// `ResultStatus` even when the job failed, so callers can record the executed job for later
-/// status lookup / cancellation. Only enqueue-level failures (the job never started) surface
-/// as `Err`.
+/// status lookup / cancellation. Only enqueue-level failures (the job never started) and result
+/// streams that broke off before their End surface as `Err`.
 #[derive(Debug, Clone)]
 pub struct JobTerminalOutcome<T> {
     pub job_id: Option<JobId>,
     pub status: ResultStatus,
     pub output: T,
+    /// Cause of a failure as classified by the server (same contract as a stream End's
+    /// `Trailer.error`). `None` on success, and also for failures of unknown cause (older
+    /// servers, results read back from the RDB), so check `status` to decide success.
+    pub error: Option<StreamError>,
 }
 
 impl<T> JobTerminalOutcome<T> {
@@ -60,22 +64,33 @@ impl<T> JobTerminalOutcome<T> {
 impl JobTerminalOutcome<serde_json::Value> {
     /// A non-success outcome whose output is the failure message, the shape every failure path
     /// reports so callers can surface the reason uniformly.
-    pub(crate) fn failure(job_id: Option<JobId>, status: ResultStatus, message: String) -> Self {
+    fn failure(
+        job_id: Option<JobId>,
+        status: ResultStatus,
+        message: String,
+        error: Option<StreamError>,
+    ) -> Self {
         Self {
             job_id,
             status,
             output: serde_json::Value::String(message),
+            error,
         }
     }
 
-    /// The outcome of a stream that ended with an in-band failure. The server neither persists a
-    /// JobResult nor sends a JobResult trailer for these, so the status comes from the error code.
-    pub(crate) fn stream_failure(job_id: Option<JobId>, error: &StreamError) -> Self {
-        Self::failure(
-            job_id,
-            result_status_for_stream_error(error),
-            describe_stream_error(error),
-        )
+    /// The outcome of a stream that ended with an in-band failure. The JobResult delivered when
+    /// the stream started reports a provisional SUCCESS and no JobResult trailer follows, so the
+    /// status comes from the error code.
+    pub(crate) fn stream_failure(job_id: Option<JobId>, error: StreamError) -> Self {
+        let status = result_status_for_stream_error(&error);
+        let message = describe_stream_error(&error);
+        Self::failure(job_id, status, message, Some(error))
+    }
+
+    /// The outcome of a job whose result reports a non-success status.
+    pub(crate) fn from_failed_result(job_id: Option<JobId>, data: JobResultData) -> Self {
+        let message = describe_job_failure(&data);
+        Self::failure(job_id, data.status(), message, data.error)
     }
 }
 
@@ -888,9 +903,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 Ok(res)
             } else {
                 Err(ClientError::RuntimeError(format!(
-                    "job failed: {:?}",
-                    res.output
-                        .map(|o| String::from_utf8_lossy(&o.items).into_owned())
+                    "job failed: {}",
+                    describe_job_failure(&res)
                 ))
                 .into())
             }
@@ -1018,9 +1032,8 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 Ok(output)
             } else {
                 Err(ClientError::RuntimeError(format!(
-                    "job failed: {:?}",
-                    res.output
-                        .map(|o| String::from_utf8_lossy(&o.items).into_owned())
+                    "job failed: {}",
+                    describe_job_failure(&res)
                 ))
                 .into())
             }
@@ -1324,11 +1337,11 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                     .items;
                 Ok(output_item)
             } else {
-                let error_message = res.output.as_ref().map_or_else(
-                    || format!("job failed with status: {:?}", res.status()),
-                    |e_bytes| String::from_utf8_lossy(&e_bytes.items).into_owned(),
-                );
-                Err(ClientError::RuntimeError(format!("job failed: {error_message}")).into())
+                Err(ClientError::RuntimeError(format!(
+                    "job failed: {}",
+                    describe_job_failure(&res)
+                ))
+                .into())
             }
         }
     }
@@ -1864,12 +1877,13 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
             // failure payload as JSON) instead of dropping them, so the executed job can be
             // tracked / cancelled via the status API.
             if status != ResultStatus::Success {
-                let error_message = result_data
-                    .output
-                    .map(|o| String::from_utf8_lossy(&o.items).into_owned())
-                    .unwrap_or_default();
-                tracing::warn!("job {:?} failed: {}", job_id, error_message);
-                return Ok(JobTerminalOutcome::failure(job_id, status, error_message));
+                let outcome = JobTerminalOutcome::from_failed_result(job_id, result_data);
+                tracing::warn!(
+                    "job {:?} failed: {}",
+                    job_id,
+                    outcome.output.as_str().unwrap_or_default()
+                );
+                return Ok(outcome);
             }
             let output_bytes = result_data
                 .output
@@ -1880,6 +1894,7 @@ pub trait UseJobworkerpClientHelper: UseJobworkerpClient + Send + Sync + Tracing
                 job_id,
                 status,
                 output: decode_output_to_json(&output_bytes, result_descriptor.as_ref())?,
+                error: None,
             })
         }
     }
@@ -2253,11 +2268,10 @@ pub(crate) fn extract_job_result_from_metadata(
 /// caller should fall back to the blocking Direct enqueue path.
 #[derive(Debug)]
 pub(crate) enum StreamEnqueueFailure {
-    /// The job reached a terminal failure; `job_id` and terminal `status`/`output` were recovered.
+    /// The job reached a terminal failure; `job_id` and the terminal result were recovered.
     Terminal {
         job_id: Option<JobId>,
-        status: ResultStatus,
-        output: Vec<u8>,
+        result: Box<JobResultData>,
     },
     /// Enqueue was rejected before a job was created — fall back to the Direct path.
     NotStreamable(anyhow::Error),
@@ -2273,23 +2287,18 @@ pub(crate) fn classify_stream_enqueue_error(status: &tonic::Status) -> StreamEnq
             status.message()
         ));
     };
-    let (status_code, output) = extract_job_result_from_metadata(status.metadata())
+    let result = extract_job_result_from_metadata(status.metadata())
         .and_then(|r| r.data)
-        .map(|d| {
-            let st = d.status();
-            let out = d.output.map(|o| o.items).unwrap_or_default();
-            (st, out)
-        })
-        .unwrap_or_else(|| {
-            (
-                ResultStatus::OtherError,
-                status.message().as_bytes().to_vec(),
-            )
+        .unwrap_or_else(|| JobResultData {
+            status: ResultStatus::OtherError as i32,
+            output: Some(crate::jobworkerp::data::ResultOutput {
+                items: status.message().as_bytes().to_vec(),
+            }),
+            ..Default::default()
         });
     StreamEnqueueFailure::Terminal {
         job_id: Some(job_id),
-        status: status_code,
-        output,
+        result: Box::new(result),
     }
 }
 
@@ -2325,8 +2334,8 @@ pub async fn collect_stream_result(
 /// Collect streaming output with the explicit chunk merge semantics. See [`StreamChunkMerge`] for
 /// when to choose each variant.
 ///
-/// A stream that the server terminated with an in-band error End trailer (e.g. an idle timeout)
-/// is returned as `Err`.
+/// A stream that the server terminated with an in-band error End trailer (e.g. an idle timeout),
+/// or one that closed before its End, is returned as `Err`.
 pub async fn collect_stream_result_with(
     stream: &mut tonic::Streaming<ResultOutputItem>,
     result_descriptor: Option<&MessageDescriptor>,
@@ -2348,11 +2357,14 @@ pub(crate) enum CollectedStream {
 
 /// Like [`collect_stream_result_with`], but reports an in-band stream failure as
 /// [`CollectedStream::Failed`] instead of `Err`, so callers can map it to a job status.
-pub(crate) async fn collect_stream_output_with(
-    stream: &mut tonic::Streaming<ResultOutputItem>,
+pub(crate) async fn collect_stream_output_with<S>(
+    stream: &mut S,
     result_descriptor: Option<&MessageDescriptor>,
     merge: StreamChunkMerge,
-) -> Result<CollectedStream> {
+) -> Result<CollectedStream>
+where
+    S: tokio_stream::Stream<Item = std::result::Result<ResultOutputItem, tonic::Status>> + Unpin,
+{
     let mut collected: Vec<u8> = Vec::new();
     // When result_descriptor is present, each Data chunk is an independent
     // protobuf message (e.g. LLM streaming delta). Concatenating raw bytes
@@ -2363,7 +2375,14 @@ pub(crate) async fn collect_stream_output_with(
     let mut has_descriptor = result_descriptor.is_some();
     let mut finalized = false;
 
-    while let Some(item_result) = stream.next().await {
+    loop {
+        // Every server stream finishes with End, so closing without one means it was cut off and
+        // the collected output may be incomplete.
+        let Some(item_result) = stream.next().await else {
+            return Err(
+                ClientError::RuntimeError("result stream ended before End".to_string()).into(),
+            );
+        };
         let item = item_result.map_err(ClientError::from_tonic_status)?;
         match item.item {
             Some(crate::jobworkerp::data::result_output_item::Item::Data(data)) => {
@@ -2464,7 +2483,12 @@ mod tests {
         meta
     }
 
-    fn with_job_result(meta: &mut MetadataMap, status: ResultStatus, output: &[u8]) {
+    fn with_job_result(
+        meta: &mut MetadataMap,
+        status: ResultStatus,
+        output: &[u8],
+        error: Option<StreamError>,
+    ) {
         let result = JobResult {
             id: None,
             data: Some(JobResultData {
@@ -2472,6 +2496,7 @@ mod tests {
                 output: Some(crate::jobworkerp::data::ResultOutput {
                     items: output.to_vec(),
                 }),
+                error,
                 ..Default::default()
             }),
             metadata: std::collections::HashMap::new(),
@@ -2575,22 +2600,49 @@ mod tests {
     // as Terminal so the executed job is still recorded with its terminal status.
     #[test]
     fn classify_terminal_failure_recovers_job_id_and_status() {
+        // The x-job-result-bin trailer keeps only code and origin of the classification.
+        let error = StreamError {
+            code: crate::jobworkerp::data::StreamErrorCode::Timeout as i32,
+            origin: "GRPC".to_string(),
+            ..Default::default()
+        };
         let mut meta = job_id_metadata(77);
-        with_job_result(&mut meta, ResultStatus::FatalError, b"boom");
+        with_job_result(
+            &mut meta,
+            ResultStatus::FatalError,
+            b"boom",
+            Some(error.clone()),
+        );
         let status = {
             let mut s = tonic::Status::new(tonic::Code::FailedPrecondition, "fatal");
             *s.metadata_mut() = meta;
             s
         };
         match classify_stream_enqueue_error(&status) {
-            StreamEnqueueFailure::Terminal {
-                job_id,
-                status,
-                output,
-            } => {
+            StreamEnqueueFailure::Terminal { job_id, result } => {
                 assert_eq!(job_id, Some(JobId { value: 77 }));
-                assert_eq!(status, ResultStatus::FatalError);
-                assert_eq!(output, b"boom");
+                assert_eq!(result.status(), ResultStatus::FatalError);
+                assert_eq!(result.output.map(|o| o.items), Some(b"boom".to_vec()));
+                assert_eq!(result.error, Some(error));
+            }
+            other => panic!("expected Terminal, got {other:?}"),
+        }
+    }
+
+    // A job_id without a JobResult still ran: the status message becomes the diagnostic.
+    #[test]
+    fn classify_terminal_failure_without_job_result_falls_back_to_the_status_message() {
+        let mut status = tonic::Status::new(tonic::Code::Internal, "worker crashed");
+        *status.metadata_mut() = job_id_metadata(79);
+        match classify_stream_enqueue_error(&status) {
+            StreamEnqueueFailure::Terminal { job_id, result } => {
+                assert_eq!(job_id, Some(JobId { value: 79 }));
+                assert_eq!(result.status(), ResultStatus::OtherError);
+                assert_eq!(
+                    result.output.map(|o| o.items),
+                    Some(b"worker crashed".to_vec())
+                );
+                assert_eq!(result.error, None);
             }
             other => panic!("expected Terminal, got {other:?}"),
         }
@@ -2684,14 +2736,116 @@ mod tests {
             code: crate::jobworkerp::data::StreamErrorCode::Cancelled as i32,
             message: "boom".to_string(),
             origin: "COMMAND".to_string(),
+            ..Default::default()
         };
-        let outcome = JobTerminalOutcome::stream_failure(job_id, &error);
+        let outcome = JobTerminalOutcome::stream_failure(job_id, error.clone());
         assert_eq!(outcome.job_id, job_id);
         assert_eq!(outcome.status, ResultStatus::Cancelled);
+        assert_eq!(outcome.error, Some(error.clone()));
         assert_eq!(
             outcome.output,
             serde_json::Value::String(describe_stream_error(&error))
         );
+    }
+
+    fn failed_result_data(output: &str, error: Option<StreamError>) -> JobResultData {
+        JobResultData {
+            status: ResultStatus::ErrorAndRetry as i32,
+            output: Some(crate::jobworkerp::data::ResultOutput {
+                items: output.as_bytes().to_vec(),
+            }),
+            error,
+            ..Default::default()
+        }
+    }
+
+    // A failure without a classification is still a failure; only the cause is unknown.
+    #[test]
+    fn failed_result_outcome_carries_the_classification_when_present() {
+        let error = StreamError {
+            code: crate::jobworkerp::data::StreamErrorCode::InvalidArgument as i32,
+            origin: "HTTP_REQUEST".to_string(),
+            ..Default::default()
+        };
+        for error in [Some(error), None] {
+            let data = failed_result_data("bad args", error.clone());
+            let expected_output = serde_json::Value::String(describe_job_failure(&data));
+            let outcome = JobTerminalOutcome::from_failed_result(Some(JobId { value: 3 }), data);
+            assert!(!outcome.is_success());
+            assert_eq!(outcome.status, ResultStatus::ErrorAndRetry);
+            assert_eq!(outcome.error, error);
+            assert_eq!(outcome.output, expected_output);
+        }
+    }
+
+    fn item(
+        item: crate::jobworkerp::data::result_output_item::Item,
+    ) -> std::result::Result<ResultOutputItem, tonic::Status> {
+        Ok(ResultOutputItem { item: Some(item) })
+    }
+
+    async fn collect_items(
+        items: Vec<std::result::Result<ResultOutputItem, tonic::Status>>,
+    ) -> Result<CollectedStream> {
+        let mut stream = futures::stream::iter(items);
+        collect_stream_output_with(&mut stream, None, StreamChunkMerge::Concat).await
+    }
+
+    #[tokio::test]
+    async fn collect_stream_completes_at_a_clean_end() {
+        use crate::jobworkerp::data::{Trailer, result_output_item::Item};
+        let collected = collect_items(vec![
+            item(Item::Data(b"\"ok\"".to_vec())),
+            item(Item::End(Trailer::default())),
+        ])
+        .await
+        .unwrap();
+        assert!(
+            matches!(collected, CollectedStream::Completed(_)),
+            "got: {collected:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_stream_reports_a_failed_end_with_its_problem() {
+        use crate::jobworkerp::data::{ProblemDetails, Trailer, result_output_item::Item};
+        let error = StreamError {
+            code: crate::jobworkerp::data::StreamErrorCode::Timeout as i32,
+            message: "timed out".to_string(),
+            origin: "WORKFLOW".to_string(),
+            problem: Some(ProblemDetails {
+                r#type: "urn:t".to_string(),
+                ..Default::default()
+            }),
+        };
+        let collected = collect_items(vec![
+            item(Item::Data(b"partial".to_vec())),
+            item(Item::End(Trailer {
+                error: Some(error.clone()),
+                ..Default::default()
+            })),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(collected, CollectedStream::Failed(error));
+    }
+
+    // A stream that closes before End may have been cut off, so it must not look complete.
+    #[tokio::test]
+    async fn collect_stream_fails_when_the_stream_closes_before_end() {
+        use crate::jobworkerp::data::result_output_item::Item;
+        for items in [vec![item(Item::Data(b"partial".to_vec()))], vec![]] {
+            let error = collect_items(items).await.expect_err("EOF before End");
+            assert!(error.to_string().contains("before End"), "got: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_stream_fails_on_a_transport_error() {
+        let error = collect_items(vec![Err(tonic::Status::unavailable("gone"))])
+            .await
+            .expect_err("transport error");
+        assert!(error.to_string().contains("gone"), "got: {error}");
     }
 }
 

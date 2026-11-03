@@ -11,7 +11,8 @@
 //! with appropriate enum decoration and streaming output support.
 
 use crate::display::{DisplayFormat, format::EnumFormatter};
-use crate::jobworkerp::data::{JobResult, ResultStatus};
+use crate::jobworkerp::data::{JobResult, ResultStatus, StreamError};
+use crate::stream_error::{code_name, problem_fields};
 use chrono::DateTime;
 use command_utils::protobuf::ProtobufDescriptor;
 use prost_reflect::MessageDescriptor;
@@ -133,9 +134,37 @@ pub fn job_result_to_json(
         } else {
             result_json["output"] = serde_json::json!(null);
         }
+
+        if let Some(error) = &data.error {
+            result_json["error"] = stream_error_to_json(error);
+        }
     }
 
     result_json
+}
+
+/// JSON form of a failure classification, with the code by name as in the server's wording (the
+/// derived serialization would show the bare enum number). The problem keeps its fields in RFC 9457
+/// order and appears only when typed.
+fn stream_error_to_json(error: &StreamError) -> JsonValue {
+    let mut json = serde_json::json!({
+        "code": code_name(error.code),
+        "origin": error.origin,
+        "message": error.message,
+    });
+    let problem = error
+        .problem
+        .as_ref()
+        .map(problem_fields)
+        .unwrap_or_default();
+    if !problem.is_empty() {
+        json["problem"] = problem
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+    }
+    json
 }
 
 /// Convert streaming output data to JSON format
@@ -157,5 +186,92 @@ pub fn streaming_output_to_json(
     } else {
         // No descriptor, treat as string
         serde_json::json!(String::from_utf8_lossy(data))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobworkerp::data::{JobResultData, ProblemDetails, ResultOutput, StreamErrorCode};
+
+    fn job_result(error: Option<StreamError>) -> JobResult {
+        JobResult {
+            id: None,
+            data: Some(JobResultData {
+                status: ResultStatus::MaxRetry as i32,
+                output: Some(ResultOutput {
+                    items: b"failed".to_vec(),
+                }),
+                error,
+                ..Default::default()
+            }),
+            metadata: std::collections::HashMap::new(),
+        }
+    }
+
+    // Successes and results read back from the RDB have no classification: keep the output shape.
+    #[test]
+    fn job_result_json_omits_error_without_classification() {
+        let json = job_result_to_json(&job_result(None), None, &DisplayFormat::Json);
+        assert!(json.get("error").is_none(), "got: {json}");
+    }
+
+    #[test]
+    fn job_result_json_shows_the_classification_and_problem() {
+        let error = StreamError {
+            code: StreamErrorCode::Timeout as i32,
+            message: "timed out".to_string(),
+            origin: "WORKFLOW".to_string(),
+            problem: Some(ProblemDetails {
+                r#type: "urn:t".to_string(),
+                instance: Some("/do/0".to_string()),
+                ..Default::default()
+            }),
+        };
+        let json = job_result_to_json(&job_result(Some(error)), None, &DisplayFormat::Json);
+        assert_eq!(
+            json["error"],
+            serde_json::json!({
+                "code": "TIMEOUT",
+                "origin": "WORKFLOW",
+                "message": "timed out",
+                "problem": {"type": "urn:t", "instance": "/do/0"}
+            })
+        );
+    }
+
+    #[test]
+    fn stream_error_json_names_the_code() {
+        let error = StreamError {
+            code: StreamErrorCode::InvalidArgument as i32,
+            message: "bad".to_string(),
+            origin: "GRPC".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            stream_error_to_json(&error),
+            serde_json::json!({"code": "INVALID_ARGUMENT", "origin": "GRPC", "message": "bad"})
+        );
+        let unknown = StreamError {
+            code: 99,
+            ..Default::default()
+        };
+        assert_eq!(
+            stream_error_to_json(&unknown)["code"],
+            serde_json::json!("99")
+        );
+    }
+
+    // A problem without a type identifies nothing, so it is left out.
+    #[test]
+    fn stream_error_json_omits_an_untyped_problem() {
+        let error = StreamError {
+            problem: Some(ProblemDetails {
+                status: 500,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(stream_error_to_json(&error).get("problem").is_none());
     }
 }

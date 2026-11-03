@@ -1530,6 +1530,7 @@ mod tests {
                 code: jobworkerp::data::StreamErrorCode::Timeout as i32,
                 message: message.to_string(),
                 origin: "WORKER".to_string(),
+                ..Default::default()
             }),
             ..Default::default()
         })

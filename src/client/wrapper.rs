@@ -16,7 +16,7 @@ use crate::{
     client::{JobworkerpClient, UseJobworkerpClient},
     command::to_request,
     error::ClientError,
-    jobworkerp::data::{JobId, ResultStatus, Runner, RunnerType, WorkerData},
+    jobworkerp::data::{JobId, ResultStatus, Runner, RunnerType, StreamError, WorkerData},
     proto::JobworkerpProto,
 };
 use anyhow::Result;
@@ -620,11 +620,12 @@ impl JobworkerpClientWrapper {
                         .await?
                         {
                             CollectedStream::Completed(output) => output,
-                            // An in-band stream failure (e.g. idle timeout) is never persisted nor
-                            // reported in a JobResult trailer, so the fallbacks below would wrongly
-                            // resolve it to Success. Its status comes from the error code instead.
+                            // An in-band stream failure (e.g. idle timeout) sends no JobResult
+                            // trailer, and the header result is the provisional SUCCESS recorded
+                            // when the stream started, so the fallbacks below would wrongly resolve
+                            // it to Success. Its status comes from the error code instead.
                             CollectedStream::Failed(error) => {
-                                return Ok(JobTerminalOutcome::stream_failure(job_id, &error));
+                                return Ok(JobTerminalOutcome::stream_failure(job_id, error));
                             }
                         };
                         // Terminal status: trailer JobResult > initial header JobResult >
@@ -633,13 +634,14 @@ impl JobworkerpClientWrapper {
                             Ok(Some(tr)) => extract_job_result_from_metadata(&tr),
                             _ => None,
                         };
-                        let status = client
+                        let (status, error) = client
                             .resolve_terminal_status(trailer_result.or(header_result), job_id)
                             .await;
                         Ok(JobTerminalOutcome {
                             job_id,
                             status,
                             output,
+                            error,
                         })
                     });
                 Ok((job_id, fut))
@@ -656,18 +658,10 @@ impl JobworkerpClientWrapper {
                     ));
                 }
                 match classify_stream_enqueue_error(&status) {
-                    StreamEnqueueFailure::Terminal {
-                        job_id,
-                        status: result_status,
-                        output,
-                    } => {
+                    StreamEnqueueFailure::Terminal { job_id, result } => {
                         // The outcome is already fully resolved here; wrap it in a ready future rather
                         // than allocating an async block that immediately returns.
-                        let outcome = JobTerminalOutcome::failure(
-                            job_id,
-                            result_status,
-                            String::from_utf8_lossy(&output).into_owned(),
-                        );
+                        let outcome = JobTerminalOutcome::from_failed_result(job_id, *result);
                         let fut: BoxFuture<'static, Result<JobTerminalOutcome<serde_json::Value>>> =
                             Box::pin(futures::future::ready(Ok(outcome)));
                         Ok((job_id, fut))
@@ -772,27 +766,27 @@ impl JobworkerpClientWrapper {
         Ok((args_bytes, result_descriptor))
     }
 
-    /// Determine the terminal status of a streaming job. Prefer a terminal `JobResult` recovered
-    /// from the stream trailer / header; otherwise look it up via `find_list_by_job_id`; if no
-    /// result was persisted, treat as Success (workflow workers run with store_failure=true, so a
-    /// missing result implies success).
+    /// Determine the terminal status (and failure classification) of a streaming job. Prefer a
+    /// terminal `JobResult` recovered from the stream trailer / header; otherwise look it up via
+    /// `find_list_by_job_id`; if no result was persisted, treat as Success (workflow workers run
+    /// with store_failure=true, so a missing result implies success).
     async fn resolve_terminal_status(
         &self,
         terminal_result: Option<crate::jobworkerp::data::JobResult>,
         job_id: Option<JobId>,
-    ) -> ResultStatus {
-        if let Some(status) = terminal_result.and_then(|r| r.data).map(|d| d.status()) {
-            return status;
+    ) -> (ResultStatus, Option<StreamError>) {
+        if let Some(d) = terminal_result.and_then(|r| r.data) {
+            return (d.status(), d.error);
         }
         if let Some(jid) = job_id {
             let fetched = self.find_first_job_result(jid).await;
             if let Ok(Some(result)) = fetched
                 && let Some(d) = result.data
             {
-                return d.status();
+                return (d.status(), d.error);
             }
         }
-        ResultStatus::Success
+        (ResultStatus::Success, None)
     }
 
     /// Fetch the first persisted JobResult for a job_id (first item of the FindListByJobId stream).
@@ -1669,7 +1663,7 @@ mod workflow_args_helpers_tests {
 mod check_workflow_output_status_tests {
     use super::{check_workflow_output_status, downgrade_workflow_outcome_if_failed};
     use crate::client::helper::JobTerminalOutcome;
-    use crate::jobworkerp::data::{JobId, ResultStatus};
+    use crate::jobworkerp::data::{JobId, ResultStatus, StreamError, StreamErrorCode};
     use serde_json::json;
 
     // Completed is the success state — pass through untouched so downstream callers receive
@@ -1822,6 +1816,7 @@ mod check_workflow_output_status_tests {
             job_id: Some(JobId { value: 1 }),
             status: ResultStatus::Success,
             output: json!({"status": "Faulted", "error_message": "boom"}),
+            error: None,
         };
         let downgraded = downgrade_workflow_outcome_if_failed(outcome);
         assert_eq!(downgraded.status, ResultStatus::ErrorAndRetry);
@@ -1837,6 +1832,7 @@ mod check_workflow_output_status_tests {
             job_id: Some(JobId { value: 2 }),
             status: ResultStatus::Success,
             output: json!({"status": "Waiting", "position": "/approve"}),
+            error: None,
         };
         let kept = downgrade_workflow_outcome_if_failed(outcome);
         assert_eq!(kept.status, ResultStatus::Success);
@@ -1851,6 +1847,7 @@ mod check_workflow_output_status_tests {
             job_id: Some(JobId { value: 3 }),
             status: ResultStatus::Success,
             output: json!({"status": "Cancelled"}),
+            error: None,
         };
         let kept = downgrade_workflow_outcome_if_failed(outcome);
         assert_eq!(kept.status, ResultStatus::Success);
@@ -1865,9 +1862,16 @@ mod check_workflow_output_status_tests {
             job_id: None,
             status: ResultStatus::Cancelled,
             output: json!({"status": "Cancelled"}),
+            error: Some(StreamError {
+                code: StreamErrorCode::Cancelled as i32,
+                origin: "WORKER".to_string(),
+                ..Default::default()
+            }),
         };
+        let expected_error = outcome.error.clone();
         let preserved = downgrade_workflow_outcome_if_failed(outcome);
         assert_eq!(preserved.status, ResultStatus::Cancelled);
+        assert_eq!(preserved.error, expected_error);
     }
 
     // Genuine successful workflow: untouched.
@@ -1877,6 +1881,7 @@ mod check_workflow_output_status_tests {
             job_id: Some(JobId { value: 9 }),
             status: ResultStatus::Success,
             output: json!({"status": "Completed", "output": "{}"}),
+            error: None,
         };
         let kept = downgrade_workflow_outcome_if_failed(outcome);
         assert_eq!(kept.status, ResultStatus::Success);
