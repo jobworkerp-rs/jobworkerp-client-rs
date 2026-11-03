@@ -40,7 +40,7 @@ use jobworkerp_client::{
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[derive(Parser, Debug)]
-#[clap(name = "jobworkerp-cli", version = "0.5.2", author = "sutr")]
+#[clap(name = "jobworkerp-cli", version, author = "sutr")]
 struct Opts {
     #[clap(short, long, default_value = "http://localhost:9000")]
     address: String,
@@ -131,5 +131,19 @@ async fn main() {
     if let Some(error) = job_execution_error {
         eprintln!("{error:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn version_follows_the_package_version() {
+        assert_eq!(
+            Opts::command().get_version(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
     }
 }
