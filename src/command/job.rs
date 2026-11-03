@@ -460,7 +460,9 @@ impl JobCommand {
                             data.worker_name,
                             data.status().as_str_name()
                         );
-                        if let Some(output) = &data.output
+                        if let Some(message) = failed_result_message(data) {
+                            println!("[error]: {message}");
+                        } else if let Some(output) = &data.output
                             && !output.items.is_empty()
                         {
                             JobResultCommand::print_job_result_output(&output.items, result_desc);
@@ -1226,6 +1228,13 @@ impl UseJobworkerpClient for JobCommandHelper {
 impl UseJobworkerpClientHelper for JobCommandHelper {}
 impl Tracing for JobCommandHelper {}
 
+/// The diagnostic of a failed result, whose output is UTF-8 text rather than the runner's result
+/// message; `None` for a success.
+fn failed_result_message(data: &jobworkerp::data::JobResultData) -> Option<String> {
+    (data.status() != jobworkerp::data::ResultStatus::Success)
+        .then(|| crate::stream_error::describe_job_failure(data))
+}
+
 /// Drain a job result stream up to its End item, calling `on_item` for every item including End.
 /// A transport error, an EOF before End, or an End trailer carrying an in-band error all fail, so
 /// a broken stream never looks like a clean completion. `kind` labels the errors (e.g. "job").
@@ -1495,6 +1504,25 @@ mod tests {
             }
             other => panic!("expected EnqueueWorkflow, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn failed_result_message_describes_only_failures() {
+        use jobworkerp::data::{JobResultData, ResultStatus};
+        let success = JobResultData {
+            status: ResultStatus::Success as i32,
+            ..Default::default()
+        };
+        assert_eq!(failed_result_message(&success), None);
+
+        let failure = JobResultData {
+            status: ResultStatus::MaxRetry as i32,
+            ..Default::default()
+        };
+        assert_eq!(
+            failed_result_message(&failure),
+            Some(crate::stream_error::describe_job_failure(&failure))
+        );
     }
 
     #[test]
