@@ -270,13 +270,12 @@ mod tests {
 
     fn string_result_descriptor() -> MessageDescriptor {
         ProtobufDescriptor::new(
-            &r#"
+            r#"
             syntax = "proto3";
             message R {
               string s = 1;
             }
-            "#
-            .to_string(),
+            "#,
         )
         .unwrap()
         .get_message_by_name("R")

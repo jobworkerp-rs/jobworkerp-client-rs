@@ -2856,7 +2856,7 @@ mod workflow_context_schema_tests {
     use serde_json::json;
 
     fn descriptor(proto: &str) -> prost_reflect::MessageDescriptor {
-        ProtobufDescriptor::new(&proto.to_string())
+        ProtobufDescriptor::new(proto)
             .unwrap()
             .get_message_by_name("WorkflowRunArgs")
             .unwrap()
