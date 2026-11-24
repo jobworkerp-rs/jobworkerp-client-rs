@@ -1410,7 +1410,7 @@ mod workflow_context_tests {
           string input = 3;
         }
         "#;
-        let descriptor = ProtobufDescriptor::new(&proto.to_string()).unwrap();
+        let descriptor = ProtobufDescriptor::new(proto).unwrap();
         let msg = descriptor.get_message_by_name("WorkflowRunArgs").unwrap();
         let err = JobworkerpClientWrapper::ensure_workflow_context_supported(&msg).unwrap_err();
         assert!(
@@ -1428,7 +1428,7 @@ mod workflow_context_tests {
           optional string workflow_context = 4;
         }
         "#;
-        let descriptor = ProtobufDescriptor::new(&proto.to_string()).unwrap();
+        let descriptor = ProtobufDescriptor::new(proto).unwrap();
         let msg = descriptor.get_message_by_name("WorkflowRunArgs").unwrap();
         JobworkerpClientWrapper::ensure_workflow_context_supported(&msg).unwrap();
     }

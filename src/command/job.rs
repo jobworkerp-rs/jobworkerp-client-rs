@@ -1820,7 +1820,7 @@ mod tests {
           optional string error_message = 5;
         }
         "#;
-        ProtobufDescriptor::new(&proto.to_string())
+        ProtobufDescriptor::new(proto)
             .unwrap()
             .get_message_by_name("WorkflowResult")
             .unwrap()
